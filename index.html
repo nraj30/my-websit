@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -38,7 +38,8 @@
   .icon-btn { background: none; border: 1px solid var(--rule); border-radius: 4px; padding: 5px 10px; cursor:pointer; color: var(--ink); font-size:16px; font-family:inherit; }
   .icon-btn:hover { background: var(--paper-dark); }
   .card { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 18px; margin-bottom: 18px; }
-  .card-title { font-family: "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); margin: 0 0 12px; }
+  .card-title { font-family: "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); margin: 0 0 12px; font-weight: 600; }
+  
   .stat-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
   .stat-box { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 16px; }
   .stat-box .label { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
@@ -46,6 +47,7 @@
   .stat-box .value.pos { color: var(--green); }
   .stat-box .value.neg { color: var(--red); }
   .dash-header { display:flex; align-items:center; justify-content:space-between; gap: 16px; margin-bottom: 6px; }
+  
   .ledger-panel { position:relative; padding-left: 22px; }
   .ledger-panel::before { content:''; position:absolute; left:12px; top:2px; bottom:2px; width:1px; background: var(--red-soft); opacity:0.55; }
   .ledger-row { display:flex; align-items:center; justify-content:space-between; padding: 9px 2px; border-bottom: 1px solid var(--rule); gap: 10px; }
@@ -55,16 +57,26 @@
   .ledger-note { font-size: 13px; color: var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ledger-date { font-size: 11px; color: var(--ink-soft); width: 44px; flex-shrink:0; }
   .ledger-amount { font-weight: 600; flex-shrink:0; }
+  
   .del-btn { background:none; border:none; cursor:pointer; color: var(--ink-soft); padding:4px 6px; flex-shrink:0; font-size:15px; font-family:inherit; }
   .del-btn:hover { color: var(--red); }
   .empty-state { text-align:center; padding: 26px 10px; color: var(--ink-soft); font-size: 13px; font-style: italic; }
-  .form-row { display:flex; flex-wrap:wrap; gap: 10px; align-items:flex-end; }
+  .form-row { display:flex; flex-wrap:wrap; gap: 10px; align-items:flex-end; margin: 0; }
   .field { display:flex; flex-direction:column; gap: 4px; }
-  .field label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+  .field label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); font-weight: bold; }
   .field input, .field select { font-family: inherit; font-size: 13px; padding: 7px 8px; border: 1px solid var(--rule); border-radius: 3px; background: #fbf8f0; color: var(--ink); }
   .field input.num, .field select.num { font-family: ui-monospace, monospace; }
-  .add-btn { display:flex; align-items:center; gap: 6px; background: var(--ink); color: var(--paper); border: none; border-radius: 3px; padding: 8px 14px; font-size: 13px; cursor:pointer; height: 33px; font-family:inherit; }
+  .add-btn { display:inline-flex; align-items:center; justify-content:center; gap: 6px; background: var(--ink); color: var(--paper); border: none; border-radius: 3px; padding: 8px 14px; font-size: 13px; cursor:pointer; height: 33px; font-family:inherit; }
   .add-btn:hover { background: #443b33; }
+  
+  /* Batch Shift Table */
+  .batch-box { background: var(--paper-dark); border: 1px solid var(--rule); border-radius: 4px; padding: 12px; margin-bottom: 16px; }
+  .batch-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  .batch-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); text-align: left; padding: 0 4px 6px 4px; border-bottom: 1px solid var(--rule); }
+  .batch-table td { padding: 4px; }
+  .batch-table input { width: 100%; font-family: inherit; font-size: 13px; padding: 6px 4px; border: 1px solid var(--rule); border-radius: 3px; background: #fbf8f0; color: var(--ink); box-sizing: border-box; }
+  .batch-table input.num { font-family: ui-monospace, monospace; }
+  
   .hanko { width: 52px; height: 52px; border-radius: 48% 52% 51% 49%; border: 3px solid var(--ink-soft); display:flex; align-items:center; justify-content:center; font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; font-size: 24px; transform: rotate(-8deg); flex-shrink:0; }
   .hanko-good { color: var(--green); border-color: var(--green); }
   .hanko-over { color: var(--red); border-color: var(--red); }
@@ -73,17 +85,15 @@
   .pbar-fill { height:100%; border-radius: 4px; transition: width 0.3s ease; }
   .budget-row { display:flex; align-items:center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
   .budget-row:last-child { border-bottom:none; }
-  .budget-row .cat-name { width: 90px; font-size: 13px; flex-shrink:0; }
-  .budget-row .bar-wrap { flex:1; display:flex; flex-direction:column; gap:4px; min-width:0; }
-  .budget-row .bar-nums { display:flex; justify-content:space-between; font-size: 11px; color: var(--ink-soft); }
-  .budget-row input { width: 90px; font-family: ui-monospace, monospace; font-size:13px; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:#fbf8f0; flex-shrink:0; }
-  .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; max-width: 320px; }
+  .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; max-width: 400px; }
   .footer-note { text-align:center; font-size: 11px; color: var(--ink-soft); margin-top: 30px; letter-spacing: 0.04em; }
   .backup-row { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
+
   @media (max-width: 480px) {
     .stat-grid { grid-template-columns: 1fr; }
     .tab-btn { padding: 7px 9px 9px; }
     .tab-btn .label-text { display:none; }
+    .batch-table input { font-size: 11px; padding: 5px 2px; }
   }
 </style>
 </head>
@@ -103,7 +113,10 @@
 <script>
 // ---------- constants ----------
 const CATEGORIES = ["Food","Housing","Transport","Utilities","Entertainment","Health","Shopping","Other"];
-const DEFAULT_SETTINGS = { hourlyRate: 1200, otThreshold: 8, otMultiplier: 1.25 };
+const DEFAULT_SETTINGS = { 
+  workplaces: "Workplace A, Workplace B, Lawson", 
+  lastBackup: null 
+};
 const TABS = [
   { id: "dashboard", label: "Overview", jp: "総覧" },
   { id: "expenses", label: "Expenses", jp: "支出" },
@@ -114,7 +127,7 @@ const TABS = [
 
 // ---------- state ----------
 let state = {
-  tab: "dashboard",
+  tab: "hours",
   month: todayISO().slice(0,7),
   expenses: load("kakeibo_expenses", []),
   budgets: load("kakeibo_budgets", {}),
@@ -152,17 +165,40 @@ function shiftMonth(ym, delta) {
 }
 function uid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 function esc(s) { const d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
-function computeEntry(entry, settings) {
+
+// --- Work Calculation ---
+function computeEntry(entry) {
   const [inH,inM] = entry.clockIn.split(":").map(Number);
   const [outH,outM] = entry.clockOut.split(":").map(Number);
-  let minutes = (outH*60+outM) - (inH*60+inM) - (Number(entry.breakMin)||0);
-  if (minutes < 0) minutes += 24*60;
-  const hours = minutes/60;
-  const reg = Math.min(hours, settings.otThreshold);
-  const ot = Math.max(0, hours - settings.otThreshold);
-  const pay = reg*settings.hourlyRate + ot*settings.hourlyRate*settings.otMultiplier;
-  return { hours, reg, ot, pay };
+  const rate = Number(entry.rate) || 0;
+  const brk = Number(entry.breakMin) || 0;
+
+  let start = inH * 60 + inM;
+  let end = outH * 60 + outM;
+  if (end < start) end += 24 * 60; 
+
+  let regMin = 0, nightMin = 0;
+  for (let m = start; m < end; m++) {
+    let h = Math.floor(m / 60) % 24;
+    if (h >= 22 || h < 5) nightMin++; 
+    else regMin++;
+  }
+
+  let remainingBreak = brk;
+  if (regMin >= remainingBreak) {
+    regMin -= remainingBreak;
+  } else {
+    remainingBreak -= regMin;
+    regMin = 0;
+    nightMin = Math.max(0, nightMin - remainingBreak);
+  }
+
+  const totalHours = (regMin + nightMin) / 60;
+  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25);
+  
+  return { totalHours, nightHours: nightMin / 60, pay };
 }
+
 function hankoHTML(status) {
   const char = status === "good" ? "良" : status === "over" ? "超" : "中";
   const cls = status === "good" ? "hanko-good" : status === "over" ? "hanko-over" : "hanko-neutral";
@@ -181,7 +217,7 @@ function getMonthExpenses() {
 }
 function getMonthWork() {
   return state.workEntries.filter(x => monthOf(x.date) === state.month).sort((a,b)=> a.date < b.date ? 1 : -1)
-    .map(e => Object.assign({}, e, { calc: computeEntry(e, state.settings) }));
+    .map(e => Object.assign({}, e, { calc: computeEntry(e) }));
 }
 
 // ---------- render ----------
@@ -222,18 +258,15 @@ function renderDashboard() {
   const budgetTotal = Object.values(state.budgets).reduce((s,v)=>s+(Number(v)||0),0);
   const status = budgetTotal > 0 ? (totalExpenses > budgetTotal ? "over" : "good") : "neutral";
 
-  let budgetCard = "";
-  if (budgetTotal > 0) {
-    budgetCard = `
-      <div class="card">
-        <p class="card-title">Budget vs Actual</p>
-        ${pbarHTML(totalExpenses, budgetTotal)}
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-soft);margin-top:6px;">
-          <span class="num">${yen(totalExpenses)} spent</span>
-          <span class="num">${yen(budgetTotal)} budget</span>
-        </div>
-      </div>`;
-  }
+  let budgetCard = budgetTotal > 0 ? `
+    <div class="card">
+      <p class="card-title">Budget vs Actual</p>
+      ${pbarHTML(totalExpenses, budgetTotal)}
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-soft);margin-top:6px;">
+        <span class="num">${yen(totalExpenses)} spent</span>
+        <span class="num">${yen(budgetTotal)} budget</span>
+      </div>
+    </div>` : "";
 
   const rows = monthExpenses.length === 0
     ? `<div class="empty-state">No expenses logged this month yet.</div>`
@@ -251,7 +284,7 @@ function renderDashboard() {
     ${monthNavHTML()}
     <div class="dash-header">
       <div class="stat-grid" style="flex:1">
-        <div class="stat-box"><div class="label">Income (Work)</div><div class="value pos num">${yen(totalPay)}</div></div>
+        <div class="stat-box"><div class="label">Income</div><div class="value pos num">${yen(totalPay)}</div></div>
         <div class="stat-box"><div class="label">Expenses</div><div class="value neg num">${yen(totalExpenses)}</div></div>
         <div class="stat-box"><div class="label">Balance</div><div class="value num ${balance>=0?'pos':'neg'}">${yen(balance)}</div></div>
       </div>
@@ -269,41 +302,27 @@ function renderExpenses() {
   const total = monthExpenses.reduce((s,x)=>s+Number(x.amount),0);
   const catOptions = CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join("");
 
-  const rows = monthExpenses.length === 0
-    ? `<div class="empty-state">Nothing recorded yet — add your first expense above.</div>`
-    : monthExpenses.map(x => `
-      <div class="ledger-row">
-        <span class="ledger-date num">${esc(x.date.slice(5))}</span>
-        <div class="ledger-main">
-          <span class="ledger-note">${esc(x.note || x.category)}</span>
-          <span class="ledger-cat">${esc(x.category)}</span>
-        </div>
-        <span class="ledger-amount num">${yen(x.amount)}</span>
-        <button class="del-btn" data-del-expense="${x.id}">✕</button>
-      </div>`).join("");
-
-  const totalRow = monthExpenses.length > 0 ? `
-    <div class="ledger-row" style="font-weight:700">
-      <span></span>
-      <div class="ledger-main"><span class="ledger-note">Total</span></div>
-      <span class="ledger-amount num">${yen(total)}</span>
-      <span style="width:23px"></span>
-    </div>` : "";
+  const rows = monthExpenses.map(x => `
+    <div class="ledger-row">
+      <span class="ledger-date num">${esc(x.date.slice(5))}</span>
+      <div class="ledger-main"><span class="ledger-note">${esc(x.note || x.category)}</span><span class="ledger-cat">${esc(x.category)}</span></div>
+      <span class="ledger-amount num">${yen(x.amount)}</span>
+      <button type="button" class="del-btn" data-del-expense="${x.id}">✕</button>
+    </div>`).join("");
 
   return `
     ${monthNavHTML()}
     <div class="card ledger-panel">
       <p class="card-title">Add Expense</p>
-      <div class="form-row" style="margin-bottom:20px">
-        <div class="field"><label>Date</label><input type="date" id="expDate" value="${todayISO()}"></div>
+      <form class="form-row" id="expForm" style="margin-bottom:20px">
+        <div class="field"><label>Date</label><input type="date" id="expDate" value="${todayISO()}" required></div>
         <div class="field"><label>Category</label><select id="expCategory">${catOptions}</select></div>
-        <div class="field"><label>Amount (¥)</label><input class="num" type="number" min="0" placeholder="0" id="expAmount"></div>
+        <div class="field"><label>Amount (¥)</label><input class="num" type="number" min="1" placeholder="0" id="expAmount" required></div>
         <div class="field" style="flex:1;min-width:140px"><label>Note</label><input type="text" placeholder="optional" id="expNote"></div>
-        <button class="add-btn" id="addExpenseBtn">+ Add</button>
-      </div>
+        <button type="submit" class="add-btn">+ Add</button>
+      </form>
       <p class="card-title">This Month</p>
-      ${rows}
-      ${totalRow}
+      ${rows || '<div class="empty-state">Nothing recorded yet.</div>'}
     </div>`;
 }
 
@@ -327,78 +346,131 @@ function renderBudget() {
       </div>`;
   }).join("");
 
-  return `
-    ${monthNavHTML()}
-    <div class="card">
-      <p class="card-title">Monthly Budget by Category</p>
-      ${rows}
-    </div>`;
+  return `${monthNavHTML()}<div class="card"><p class="card-title">Monthly Budget</p>${rows}</div>`;
 }
 
 function renderHours() {
   const monthWork = getMonthWork();
   const totalPay = monthWork.reduce((s,x)=>s+x.calc.pay,0);
-  const totalReg = monthWork.reduce((s,x)=>s+x.calc.reg,0);
-  const totalOt = monthWork.reduce((s,x)=>s+x.calc.ot,0);
+  const totalHours = monthWork.reduce((s,x)=>s+x.calc.totalHours,0);
+  const totalNight = monthWork.reduce((s,x)=>s+x.calc.nightHours,0);
+  
+  const places = (state.settings.workplaces || "Workplace A").split(",").map(p => p.trim());
+  const placeOptions = places.map(p => `<option value="${p}">${p}</option>`).join("");
 
-  const rows = monthWork.length === 0
-    ? `<div class="empty-state">No shifts logged yet — add one above.</div>`
+  // Default empty rows
+  let batchRowsHtml = "";
+  for(let i = 0; i < 4; i++) {
+    batchRowsHtml += `
+      <tr class="b-tr">
+        <td><input type="date" class="num b-date" value="${i===0 ? todayISO() : ''}"></td>
+        <td><input type="time" class="num b-in" value="17:00" step="60"></td>
+        <td><input type="time" class="num b-out" value="22:00" step="60"></td>
+        <td><input type="number" min="0" class="num b-brk" placeholder="0"></td>
+      </tr>`;
+  }
+
+  const ledgerRows = monthWork.length === 0
+    ? `<div class="empty-state">No shifts logged yet.</div>`
     : monthWork.map(x => `
       <div class="ledger-row">
         <span class="ledger-date num">${esc(x.date.slice(5))}</span>
         <div class="ledger-main">
-          <span class="ledger-note">${esc(x.clockIn)}–${esc(x.clockOut)} · ${esc(x.breakMin)}m break</span>
-          <span class="ledger-cat">${x.calc.reg.toFixed(1)}h reg${x.calc.ot>0?` + ${x.calc.ot.toFixed(1)}h OT`:""}</span>
+          <span class="ledger-note">${esc(x.place)} · <span class="num">${esc(x.clockIn)}</span>–<span class="num">${x.clockOut}</span> ${x.breakMin>0?`(brk: ${x.breakMin}m)`:''}</span>
+          <span class="ledger-cat">${x.calc.totalHours.toFixed(1)}h total @ ¥${x.rate}/hr${x.calc.nightHours>0?` (${x.calc.nightHours.toFixed(1)}h late)`:""}</span>
         </div>
         <span class="ledger-amount num">${yen(x.calc.pay)}</span>
-        <button class="del-btn" data-del-work="${x.id}">✕</button>
+        <button type="button" class="del-btn" data-del-work="${x.id}">✕</button>
       </div>`).join("");
 
   return `
     ${monthNavHTML()}
+
     <div class="card">
-      <p class="card-title">Log a Shift</p>
-      <div class="form-row">
-        <div class="field"><label>Date</label><input type="date" id="workDate" value="${todayISO()}"></div>
-        <div class="field"><label>Clock In</label><input type="time" id="workIn" value="09:00"></div>
-        <div class="field"><label>Clock Out</label><input type="time" id="workOut" value="18:00"></div>
-        <div class="field"><label>Break (min)</label><input class="num" type="number" min="0" id="workBreak" value="60"></div>
-        <button class="add-btn" id="addWorkBtn">+ Add</button>
-      </div>
-      <div style="font-size:11px;color:var(--ink-soft);margin-top:10px">
-        Overtime kicks in past ${state.settings.otThreshold}h/day at ${state.settings.otMultiplier}× rate (${yen(state.settings.hourlyRate)}/hr base). Adjust in Settings.
-      </div>
+      <p class="card-title">LOG A SHIFT</p>
+      
+      <!-- Wrap entire batch input in a form for Enter key submission -->
+      <form id="batchForm">
+        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:14px;">
+          <div class="field">
+            <label>WORK PLACE</label>
+            <select id="batchPlace">${placeOptions}</select>
+          </div>
+          <div class="field">
+            <label>RATE</label>
+            <input class="num" type="number" min="0" id="batchRate" value="1200" style="width:100px;">
+          </div>
+        </div>
+
+        <div class="batch-box">
+          <div style="font-size: 11px; font-weight: bold; margin-bottom: 8px; color: var(--ink-soft); text-transform: uppercase;">
+            SHIFT: Quick 1-Month Generator
+          </div>
+          <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; font-size: 13px;">
+            <label><input type="checkbox" class="shift-day" value="0"> Sun</label>
+            <label><input type="checkbox" class="shift-day" value="1"> Mon</label>
+            <label><input type="checkbox" class="shift-day" value="2"> Tue</label>
+            <label><input type="checkbox" class="shift-day" value="3"> Wed</label>
+            <label><input type="checkbox" class="shift-day" value="4"> Thu</label>
+            <label><input type="checkbox" class="shift-day" value="5"> Fri</label>
+            <label><input type="checkbox" class="shift-day" value="6"> Sat</label>
+          </div>
+          <div class="form-row">
+            <div class="field"><label>CLOCK IN</label><input type="time" id="genIn" value="17:00" step="60"></div>
+            <div class="field"><label>CLOCK OUT</label><input type="time" id="genOut" value="22:00" step="60"></div>
+            <div class="field"><label>BREAK (MIN)</label><input type="number" min="0" id="genBreak" placeholder="0" class="num" style="width:80px"></div>
+            <button type="button" class="add-btn" id="generateMonthBtn" style="margin-left: auto;">↓ Generate Month</button>
+          </div>
+        </div>
+
+        <table class="batch-table" id="batchTable">
+          <thead>
+            <tr>
+              <th style="width:30%">DATE</th>
+              <th style="width:25%">CLOCK IN</th>
+              <th style="width:25%">CLOCK OUT</th>
+              <th style="width:20%">BREAK</th>
+            </tr>
+          </thead>
+          <tbody id="batchTbody">
+            ${batchRowsHtml}
+          </tbody>
+        </table>
+
+        <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+          <button type="submit" class="add-btn" id="saveBatchBtn">+ Save Shifts to Ledger</button>
+        </div>
+      </form>
     </div>
+
     <div class="stat-grid">
-      <div class="stat-box"><div class="label">Regular Hours</div><div class="value num">${totalReg.toFixed(1)}h</div></div>
-      <div class="stat-box"><div class="label">Overtime Hours</div><div class="value num" style="color:var(--amber)">${totalOt.toFixed(1)}h</div></div>
-      <div class="stat-box"><div class="label">Total Pay</div><div class="value pos num">${yen(totalPay)}</div></div>
+      <div class="stat-box"><div class="label">Total hours</div><div class="value num">${totalHours.toFixed(1)}h</div></div>
+      <div class="stat-box"><div class="label">LATE NIGHT (22-05)</div><div class="value num" style="color:var(--amber)">${totalNight.toFixed(1)}h</div></div>
+      <div class="stat-box"><div class="label">Total pay</div><div class="value pos num">${yen(totalPay)}</div></div>
     </div>
+
     <div class="card ledger-panel">
       <p class="card-title">This Month's Shifts</p>
-      ${rows}
+      ${ledgerRows}
     </div>`;
 }
 
 function renderSettings() {
   return `
     <div class="card">
-      <p class="card-title">Work Hours Rules</p>
+      <p class="card-title">Workplace Settings</p>
       <div class="settings-grid">
-        <div class="field"><label>Base Hourly Rate (¥)</label><input class="num" type="number" min="0" id="setRate" value="${state.settings.hourlyRate}"></div>
-        <div class="field"><label>Overtime Threshold (hours/day)</label><input class="num" type="number" min="0" step="0.5" id="setThreshold" value="${state.settings.otThreshold}"></div>
-        <div class="field"><label>Overtime Multiplier</label><input class="num" type="number" min="1" step="0.05" id="setMult" value="${state.settings.otMultiplier}"></div>
+        <div class="field">
+          <label>My Workplaces (comma separated)</label>
+          <input type="text" id="setWorkplaces" value="${esc(state.settings.workplaces)}">
+        </div>
       </div>
-      <div style="font-size:11px;color:var(--ink-soft);margin-top:16px">
-        Japan's Labor Standards Act sets a standard baseline of 8 hours/day (40/week) before overtime pay applies,
-        with a statutory minimum premium of 1.25× — adjust these to match your actual contract.
+      <div style="font-size:11px;color:var(--ink-soft);margin-top:10px">
+        Add multiple workplace names here. They will appear in the WORK PLACE selection on the Shift tab.
       </div>
     </div>
     <div class="card">
       <p class="card-title">Backup &amp; Restore</p>
-      <p style="font-size:12px;color:var(--ink-soft);margin-top:0">
-        This data lives only in this browser. Download a backup file regularly, especially before clearing browser data.
-      </p>
       <div class="backup-row">
         <button class="add-btn" id="downloadBackup">Download backup</button>
         <label class="add-btn" style="cursor:pointer">
@@ -414,14 +486,17 @@ function attachHandlers() {
   document.querySelectorAll("[data-tab]").forEach(btn => {
     btn.onclick = () => { state.tab = btn.dataset.tab; render(); };
   });
+  
   const prev = document.getElementById("prevMonth");
   const next = document.getElementById("nextMonth");
   if (prev) prev.onclick = () => { state.month = shiftMonth(state.month, -1); render(); };
   if (next) next.onclick = () => { state.month = shiftMonth(state.month, 1); render(); };
 
-  const addExpenseBtn = document.getElementById("addExpenseBtn");
-  if (addExpenseBtn) addExpenseBtn.onclick = () => {
-    const date = document.getElementById("expDate").value || todayISO();
+  // --- Expenses Handlers ---
+  const expForm = document.getElementById("expForm");
+  if (expForm) expForm.onsubmit = (e) => {
+    e.preventDefault();
+    const date = document.getElementById("expDate").value;
     const category = document.getElementById("expCategory").value;
     const amount = Number(document.getElementById("expAmount").value);
     const note = document.getElementById("expNote").value.trim();
@@ -430,14 +505,17 @@ function attachHandlers() {
     save("kakeibo_expenses", state.expenses);
     render();
   };
+
   document.querySelectorAll("[data-del-expense]").forEach(btn => {
     btn.onclick = () => {
+      if (!confirm("Delete this expense?")) return;
       state.expenses = state.expenses.filter(x => x.id !== btn.dataset.delExpense);
       save("kakeibo_expenses", state.expenses);
       render();
     };
   });
 
+  // --- Budget Auto-save ---
   document.querySelectorAll("[data-budget-cat]").forEach(input => {
     input.onblur = () => {
       state.budgets[input.dataset.budgetCat] = input.value === "" ? 0 : Number(input.value);
@@ -445,36 +523,114 @@ function attachHandlers() {
     };
   });
 
-  const addWorkBtn = document.getElementById("addWorkBtn");
-  if (addWorkBtn) addWorkBtn.onclick = () => {
-    const date = document.getElementById("workDate").value || todayISO();
-    const clockIn = document.getElementById("workIn").value;
-    const clockOut = document.getElementById("workOut").value;
-    const breakMin = Number(document.getElementById("workBreak").value) || 0;
-    if (!clockIn || !clockOut) return;
-    state.workEntries.push({ id: uid(), date, clockIn, clockOut, breakMin });
-    save("kakeibo_workEntries", state.workEntries);
-    render();
-  };
+  // --- Batch Workplace Change: Reset Table ---
+  const batchPlace = document.getElementById("batchPlace");
+  if (batchPlace) {
+    batchPlace.onchange = () => {
+      const tbody = document.getElementById("batchTbody");
+      if (tbody) {
+        let html = "";
+        for(let i = 0; i < 4; i++) {
+          html += `
+            <tr class="b-tr">
+              <td><input type="date" class="num b-date" value="${i===0 ? todayISO() : ''}"></td>
+              <td><input type="time" class="num b-in" value="17:00" step="60"></td>
+              <td><input type="time" class="num b-out" value="22:00" step="60"></td>
+              <td><input type="number" min="0" class="num b-brk" placeholder="0"></td>
+            </tr>`;
+        }
+        tbody.innerHTML = html;
+      }
+    };
+  }
+
+  // --- 1-Month Shift Generator ---
+  const genBtn = document.getElementById("generateMonthBtn");
+  if (genBtn) {
+    genBtn.onclick = () => {
+      const selectedDays = Array.from(document.querySelectorAll('.shift-day:checked')).map(cb => Number(cb.value));
+      const genIn = document.getElementById("genIn").value;
+      const genOut = document.getElementById("genOut").value;
+      const genBreak = document.getElementById("genBreak").value;
+
+      if (selectedDays.length === 0) {
+        alert("Please select at least one day of the week (e.g., Sun, Mon).");
+        return;
+      }
+
+      const [year, month] = state.month.split("-").map(Number);
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const tbody = document.getElementById("batchTbody");
+      let html = "";
+
+      for (let i = 1; i <= daysInMonth; i++) {
+        const dateObj = new Date(year, month - 1, i);
+        if (selectedDays.includes(dateObj.getDay())) {
+          const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+          html += `
+            <tr class="b-tr">
+              <td><input type="date" class="num b-date" value="${dateStr}"></td>
+              <td><input type="time" class="num b-in" value="${genIn}" step="60"></td>
+              <td><input type="time" class="num b-out" value="${genOut}" step="60"></td>
+              <td><input type="number" min="0" class="num b-brk" value="${genBreak || ''}" placeholder="0"></td>
+            </tr>`;
+        }
+      }
+      tbody.innerHTML = html;
+    };
+  }
+
+  // --- Form Submission via Enter Key or Button ---
+  const batchForm = document.getElementById("batchForm");
+  if (batchForm) {
+    batchForm.onsubmit = (e) => {
+      e.preventDefault(); // 画面の再読み込みを防ぐ
+      const place = document.getElementById("batchPlace").value;
+      const rate = Number(document.getElementById("batchRate").value) || 0;
+      const rows = document.querySelectorAll(".b-tr");
+      let added = 0;
+
+      rows.forEach(tr => {
+        const date = tr.querySelector(".b-date").value;
+        const clockIn = tr.querySelector(".b-in").value;
+        const clockOut = tr.querySelector(".b-out").value;
+        const breakMin = Number(tr.querySelector(".b-brk").value) || 0;
+
+        if (date && clockIn && clockOut) {
+          state.workEntries.push({ id: uid(), date, place, rate, clockIn, clockOut, breakMin });
+          added++;
+        }
+      });
+
+      if (added > 0) {
+        save("kakeibo_workEntries", state.workEntries);
+        render(); // 保存後にUIを更新
+      } else {
+        alert("Please ensure at least one row has a Date, Clock In, and Clock Out.");
+      }
+    };
+  }
+
+  // --- Delete Shift ---
   document.querySelectorAll("[data-del-work]").forEach(btn => {
     btn.onclick = () => {
+      if (!confirm("Delete this shift?")) return;
       state.workEntries = state.workEntries.filter(x => x.id !== btn.dataset.delWork);
       save("kakeibo_workEntries", state.workEntries);
       render();
     };
   });
 
-  ["setRate","setThreshold","setMult"].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.onblur = () => {
-      state.settings.hourlyRate = Number(document.getElementById("setRate").value) || 0;
-      state.settings.otThreshold = Number(document.getElementById("setThreshold").value) || 0;
-      state.settings.otMultiplier = Number(document.getElementById("setMult").value) || 1;
+  // --- Settings & Workplaces ---
+  const setWp = document.getElementById("setWorkplaces");
+  if (setWp) {
+    setWp.onblur = () => {
+      state.settings.workplaces = setWp.value || "Workplace A";
       save("kakeibo_settings", state.settings);
     };
-  });
+  }
 
+  // --- Backup & Restore ---
   const downloadBtn = document.getElementById("downloadBackup");
   if (downloadBtn) downloadBtn.onclick = () => {
     const payload = {
@@ -492,6 +648,7 @@ function attachHandlers() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
   const restoreInput = document.getElementById("restoreInput");
   if (restoreInput) restoreInput.onchange = (e) => {
     const file = e.target.files[0];
@@ -507,7 +664,7 @@ function attachHandlers() {
         alert("Backup restored.");
         render();
       } catch (err) {
-        alert("Could not read that file — is it a valid backup?");
+        alert("Could not read backup file.");
       }
     };
     reader.readAsText(file);
