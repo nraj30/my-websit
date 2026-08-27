@@ -1,0 +1,589 @@
+import { useState, useEffect, useMemo } from "react";
+import {
+  Plus, Trash2, Clock3, Wallet, PiggyBank, Settings2, ChevronLeft,
+  ChevronRight, BookOpen, Sunrise
+} from "lucide-react";
+
+const CATEGORIES = ["Food", "Housing", "Transport", "Utilities", "Entertainment", "Health", "Shopping", "Other"];
+const DEFAULT_SETTINGS = { hourlyRate: 1200, otThreshold: 8, otMultiplier: 1.25 };
+const TABS = [
+  { id: "dashboard", label: "Overview", jp: "総覧", icon: BookOpen },
+  { id: "expenses", label: "Expenses", jp: "支出", icon: Wallet },
+  { id: "budget", label: "Budget", jp: "予算", icon: PiggyBank },
+  { id: "hours", label: "Work Hours", jp: "勤務", icon: Clock3 },
+  { id: "settings", label: "Settings", jp: "設定", icon: Settings2 },
+];
+
+function yen(n) {
+  const v = Math.round(Number(n) || 0);
+  return (v < 0 ? "-¥" : "¥") + Math.abs(v).toLocaleString("en-US");
+}
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+function monthOf(dateStr) {
+  return dateStr.slice(0, 7);
+}
+function formatMonth(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+function shiftMonth(ym, delta) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+function uid() {
+  return (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2));
+}
+function computeEntry(entry, settings) {
+  const [inH, inM] = entry.clockIn.split(":").map(Number);
+  const [outH, outM] = entry.clockOut.split(":").map(Number);
+  let minutes = (outH * 60 + outM) - (inH * 60 + inM) - (Number(entry.breakMin) || 0);
+  if (minutes < 0) minutes += 24 * 60;
+  const hours = minutes / 60;
+  const reg = Math.min(hours, settings.otThreshold);
+  const ot = Math.max(0, hours - settings.otThreshold);
+  const pay = reg * settings.hourlyRate + ot * settings.hourlyRate * settings.otMultiplier;
+  return { hours, reg, ot, pay };
+}
+
+async function storageGet(key) {
+  try {
+    const r = await window.storage.get(key, false);
+    return r ? JSON.parse(r.value) : null;
+  } catch (e) {
+    return null;
+  }
+}
+async function storageSet(key, value) {
+  try {
+    await window.storage.set(key, JSON.stringify(value), false);
+  } catch (e) {
+    console.error("storage set failed", key, e);
+  }
+}
+
+function Hanko({ status, small }) {
+  const char = status === "good" ? "良" : status === "over" ? "超" : "中";
+  const cls = status === "good" ? "hanko hanko-good" : status === "over" ? "hanko hanko-over" : "hanko hanko-neutral";
+  return <div className={cls + (small ? " hanko-small" : "")}>{char}</div>;
+}
+
+function ProgressBar({ value, max, tone }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  const over = max > 0 && value > max;
+  return (
+    <div className="pbar-track">
+      <div
+        className="pbar-fill"
+        style={{ width: pct + "%", background: over ? "var(--red)" : tone === "green" ? "var(--green)" : "var(--ink-soft)" }}
+      />
+    </div>
+  );
+}
+
+function MonthNav({ month, setMonth }) {
+  return (
+    <div className="month-nav">
+      <button className="icon-btn" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month">
+        <ChevronLeft size={18} />
+      </button>
+      <span className="month-label">{formatMonth(month)}</span>
+      <button className="icon-btn" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month">
+        <ChevronRight size={18} />
+      </button>
+    </div>
+  );
+}
+
+export default function App() {
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("dashboard");
+  const [month, setMonth] = useState(monthOf(todayISO()));
+
+  const [expenses, setExpenses] = useState([]);
+  const [budgets, setBudgets] = useState({});
+  const [workEntries, setWorkEntries] = useState([]);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+
+  useEffect(() => {
+    (async () => {
+      const [e, b, w, s] = await Promise.all([
+        storageGet("expenses"),
+        storageGet("budgets"),
+        storageGet("workEntries"),
+        storageGet("settings"),
+      ]);
+      if (e) setExpenses(e);
+      if (b) setBudgets(b);
+      if (w) setWorkEntries(w);
+      if (s) setSettings({ ...DEFAULT_SETTINGS, ...s });
+      setLoading(false);
+    })();
+  }, []);
+
+  const monthExpenses = useMemo(
+    () => expenses.filter((x) => monthOf(x.date) === month).sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [expenses, month]
+  );
+  const monthWork = useMemo(
+    () => workEntries.filter((x) => monthOf(x.date) === month).sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [workEntries, month]
+  );
+  const totalExpenses = useMemo(() => monthExpenses.reduce((s, x) => s + Number(x.amount), 0), [monthExpenses]);
+  const workComputed = useMemo(() => monthWork.map((e) => ({ ...e, calc: computeEntry(e, settings) })), [monthWork, settings]);
+  const totalPay = useMemo(() => workComputed.reduce((s, x) => s + x.calc.pay, 0), [workComputed]);
+  const totalRegHours = useMemo(() => workComputed.reduce((s, x) => s + x.calc.reg, 0), [workComputed]);
+  const totalOtHours = useMemo(() => workComputed.reduce((s, x) => s + x.calc.ot, 0), [workComputed]);
+  const budgetTotal = useMemo(() => Object.values(budgets).reduce((s, v) => s + (Number(v) || 0), 0), [budgets]);
+  const balance = totalPay - totalExpenses;
+  const overallStatus = budgetTotal > 0 ? (totalExpenses > budgetTotal ? "over" : "good") : "neutral";
+
+  const spentByCategory = useMemo(() => {
+    const map = {};
+    monthExpenses.forEach((x) => {
+      map[x.category] = (map[x.category] || 0) + Number(x.amount);
+    });
+    return map;
+  }, [monthExpenses]);
+
+  async function addExpense(entry) {
+    const next = [...expenses, { id: uid(), ...entry }];
+    setExpenses(next);
+    await storageSet("expenses", next);
+  }
+  async function deleteExpense(id) {
+    const next = expenses.filter((x) => x.id !== id);
+    setExpenses(next);
+    await storageSet("expenses", next);
+  }
+  async function setBudgetFor(cat, value) {
+    const next = { ...budgets, [cat]: value };
+    setBudgets(next);
+    await storageSet("budgets", next);
+  }
+  async function addWorkEntry(entry) {
+    const next = [...workEntries, { id: uid(), ...entry }];
+    setWorkEntries(next);
+    await storageSet("workEntries", next);
+  }
+  async function deleteWorkEntry(id) {
+    const next = workEntries.filter((x) => x.id !== id);
+    setWorkEntries(next);
+    await storageSet("workEntries", next);
+  }
+  async function updateSettings(patch) {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    await storageSet("settings", next);
+  }
+
+  return (
+    <div className="app-root">
+      <style>{`
+        .app-root {
+          --paper: #ece5d3;
+          --paper-dark: #e2d9c1;
+          --ink: #2a2420;
+          --ink-soft: #6b6153;
+          --red: #a8382a;
+          --red-soft: #c07a6a;
+          --green: #45603d;
+          --amber: #a3721f;
+          --rule: #c7bc9e;
+          font-family: -apple-system, "Hiragino Sans", "Yu Gothic", "Segoe UI", sans-serif;
+          background: var(--paper);
+          color: var(--ink);
+          min-height: 100%;
+          padding: 0;
+          background-image:
+            linear-gradient(var(--paper), var(--paper)),
+            repeating-linear-gradient(transparent, transparent 27px, rgba(199,188,158,0.35) 28px);
+        }
+        .num { font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", "Roboto Mono", monospace; }
+        .shell { max-width: 760px; margin: 0 auto; padding: 28px 20px 60px; }
+        .masthead { display:flex; align-items:baseline; justify-content:space-between; margin-bottom: 22px; border-bottom: 2px solid var(--ink); padding-bottom: 12px; }
+        .masthead h1 { font-family: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; font-size: 30px; margin:0; letter-spacing: 0.04em; }
+        .masthead .sub { font-size: 12px; color: var(--ink-soft); letter-spacing: 0.12em; text-transform: uppercase; }
+        .tabbar { display:flex; gap:2px; margin-bottom: 20px; border-bottom: 1px solid var(--rule); }
+        .tab-btn { display:flex; flex-direction:column; align-items:center; gap:4px; padding: 8px 14px 10px; background: var(--paper-dark); border: 1px solid var(--rule); border-bottom: none; border-radius: 6px 6px 0 0; cursor:pointer; color: var(--ink-soft); font-size: 11px; position:relative; top:1px; }
+        .tab-btn.active { background: var(--paper); color: var(--ink); border-color: var(--ink); font-weight: 600; }
+        .tab-btn .jp { font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; font-size: 10px; opacity:0.7; }
+        .month-nav { display:flex; align-items:center; justify-content:center; gap: 14px; margin-bottom: 20px; }
+        .month-label { font-family: "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; font-size: 17px; min-width: 170px; text-align:center; }
+        .icon-btn { background: none; border: 1px solid var(--rule); border-radius: 4px; padding: 5px; cursor:pointer; color: var(--ink); display:flex; }
+        .icon-btn:hover { background: var(--paper-dark); }
+        .card { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 18px; margin-bottom: 18px; }
+        .card-title { font-family: "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); margin: 0 0 12px; }
+        .stat-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+        .stat-box { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 16px; }
+        .stat-box .label { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+        .stat-box .value { font-size: 22px; font-weight: 600; }
+        .stat-box .value.pos { color: var(--green); }
+        .stat-box .value.neg { color: var(--red); }
+        .dash-header { display:flex; align-items:center; justify-content:space-between; gap: 16px; margin-bottom: 6px; }
+        .ledger-panel { position:relative; padding-left: 22px; }
+        .ledger-panel::before { content:''; position:absolute; left:12px; top:2px; bottom:2px; width:1px; background: var(--red-soft); opacity:0.55; }
+        .ledger-row { display:flex; align-items:center; justify-content:space-between; padding: 9px 2px; border-bottom: 1px solid var(--rule); gap: 10px; }
+        .ledger-row:last-child { border-bottom: none; }
+        .ledger-main { display:flex; flex-direction:column; gap:2px; min-width:0; }
+        .ledger-cat { font-size: 12px; color: var(--ink-soft); }
+        .ledger-note { font-size: 13px; color: var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .ledger-date { font-size: 11px; color: var(--ink-soft); width: 68px; flex-shrink:0; }
+        .ledger-amount { font-weight: 600; flex-shrink:0; }
+        .del-btn { background:none; border:none; cursor:pointer; color: var(--ink-soft); padding:4px; flex-shrink:0; }
+        .del-btn:hover { color: var(--red); }
+        .empty-state { text-align:center; padding: 26px 10px; color: var(--ink-soft); font-size: 13px; font-style: italic; }
+        .form-row { display:flex; flex-wrap:wrap; gap: 10px; align-items:flex-end; }
+        .field { display:flex; flex-direction:column; gap: 4px; }
+        .field label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+        .field input, .field select { font-family: inherit; font-size: 13px; padding: 7px 8px; border: 1px solid var(--rule); border-radius: 3px; background: #fbf8f0; color: var(--ink); }
+        .field input.num, .field select.num { font-family: ui-monospace, monospace; }
+        .add-btn { display:flex; align-items:center; gap: 6px; background: var(--ink); color: var(--paper); border: none; border-radius: 3px; padding: 8px 14px; font-size: 13px; cursor:pointer; height: 33px; }
+        .add-btn:hover { background: #443b33; }
+        .hanko { width: 52px; height: 52px; border-radius: 48% 52% 51% 49%; border: 3px solid var(--ink-soft); display:flex; align-items:center; justify-content:center; font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; font-size: 24px; transform: rotate(-8deg); flex-shrink:0; }
+        .hanko-small { width: 34px; height:34px; font-size:16px; border-width:2px; }
+        .hanko-good { color: var(--green); border-color: var(--green); }
+        .hanko-over { color: var(--red); border-color: var(--red); }
+        .hanko-neutral { color: var(--amber); border-color: var(--amber); }
+        .pbar-track { width:100%; height: 7px; background: var(--paper-dark); border-radius: 4px; overflow:hidden; border: 1px solid var(--rule); }
+        .pbar-fill { height:100%; border-radius: 4px; transition: width 0.3s ease; }
+        .budget-row { display:flex; align-items:center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+        .budget-row:last-child { border-bottom:none; }
+        .budget-row .cat-name { width: 100px; font-size: 13px; flex-shrink:0; }
+        .budget-row .bar-wrap { flex:1; display:flex; flex-direction:column; gap:4px; }
+        .budget-row .bar-nums { display:flex; justify-content:space-between; font-size: 11px; color: var(--ink-soft); }
+        .budget-row input { width: 90px; font-family: ui-monospace, monospace; font-size:13px; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:#fbf8f0; }
+        .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; max-width: 320px; }
+        .work-summary { display:flex; gap: 14px; flex-wrap:wrap; margin-bottom: 4px; }
+        .footer-note { text-align:center; font-size: 11px; color: var(--ink-soft); margin-top: 30px; letter-spacing: 0.04em; }
+        @media (max-width: 480px) {
+          .stat-grid { grid-template-columns: 1fr; }
+          .tab-btn { padding: 7px 9px 9px; }
+          .tab-btn .label-text { display:none; }
+        }
+      `}</style>
+
+      <div className="shell">
+        <div className="masthead">
+          <div>
+            <h1>家計簿 Kakeibo</h1>
+            <div className="sub">Personal Ledger</div>
+          </div>
+          <Sunrise size={22} color="var(--ink-soft)" />
+        </div>
+
+        <div className="tabbar">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <button key={t.id} className={"tab-btn" + (tab === t.id ? " active" : "")} onClick={() => setTab(t.id)}>
+                <Icon size={16} />
+                <span className="label-text">{t.label}</span>
+                <span className="jp">{t.jp}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {loading ? (
+          <div className="empty-state">Opening the ledger…</div>
+        ) : (
+          <>
+            {tab !== "settings" && <MonthNav month={month} setMonth={setMonth} />}
+
+            {tab === "dashboard" && (
+              <>
+                <div className="dash-header">
+                  <div className="stat-grid" style={{ flex: 1 }}>
+                    <div className="stat-box">
+                      <div className="label">Income (Work)</div>
+                      <div className="value pos">{yen(totalPay)}</div>
+                    </div>
+                    <div className="stat-box">
+                      <div className="label">Expenses</div>
+                      <div className="value neg">{yen(totalExpenses)}</div>
+                    </div>
+                    <div className="stat-box">
+                      <div className="label">Balance</div>
+                      <div className={"value " + (balance >= 0 ? "pos" : "neg")}>{yen(balance)}</div>
+                    </div>
+                  </div>
+                  <Hanko status={overallStatus} />
+                </div>
+
+                {budgetTotal > 0 && (
+                  <div className="card">
+                    <p className="card-title">Budget vs Actual</p>
+                    <ProgressBar value={totalExpenses} max={budgetTotal} />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>
+                      <span className="num">{yen(totalExpenses)} spent</span>
+                      <span className="num">{yen(budgetTotal)} budget</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="card ledger-panel">
+                  <p className="card-title">Recent Entries</p>
+                  {monthExpenses.length === 0 ? (
+                    <div className="empty-state">No expenses logged this month yet.</div>
+                  ) : (
+                    monthExpenses.slice(0, 6).map((x) => (
+                      <div className="ledger-row" key={x.id}>
+                        <span className="ledger-date num">{x.date.slice(5)}</span>
+                        <div className="ledger-main">
+                          <span className="ledger-note">{x.note || x.category}</span>
+                          <span className="ledger-cat">{x.category}</span>
+                        </div>
+                        <span className="ledger-amount num">{yen(x.amount)}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+
+            {tab === "expenses" && (
+              <ExpensesTab monthExpenses={monthExpenses} total={totalExpenses} onAdd={addExpense} onDelete={deleteExpense} />
+            )}
+
+            {tab === "budget" && (
+              <BudgetTab budgets={budgets} spentByCategory={spentByCategory} setBudgetFor={setBudgetFor} />
+            )}
+
+            {tab === "hours" && (
+              <HoursTab
+                entries={workComputed}
+                totalPay={totalPay}
+                totalRegHours={totalRegHours}
+                totalOtHours={totalOtHours}
+                onAdd={addWorkEntry}
+                onDelete={deleteWorkEntry}
+                settings={settings}
+              />
+            )}
+
+            {tab === "settings" && <SettingsTab settings={settings} updateSettings={updateSettings} />}
+          </>
+        )}
+
+        <div className="footer-note">Data is stored privately to your account and stays across sessions.</div>
+      </div>
+    </div>
+  );
+}
+
+function ExpensesTab({ monthExpenses, total, onAdd, onDelete }) {
+  const [date, setDate] = useState(todayISO());
+  const [category, setCategory] = useState(CATEGORIES[0]);
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+
+  function submit() {
+    if (!amount || Number(amount) <= 0) return;
+    onAdd({ date, category, amount: Number(amount), note: note.trim() });
+    setAmount("");
+    setNote("");
+  }
+
+  return (
+    <div className="card ledger-panel">
+      <p className="card-title">Add Expense</p>
+      <div className="form-row" style={{ marginBottom: 20 }}>
+        <div className="field">
+          <label>Date</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Category</label>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            {CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Amount (¥)</label>
+          <input className="num" type="number" min="0" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </div>
+        <div className="field" style={{ flex: 1, minWidth: 140 }}>
+          <label>Note</label>
+          <input type="text" placeholder="optional" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+        <button className="add-btn" onClick={submit}><Plus size={15} /> Add</button>
+      </div>
+
+      <p className="card-title">This Month</p>
+      {monthExpenses.length === 0 ? (
+        <div className="empty-state">Nothing recorded yet — add your first expense above.</div>
+      ) : (
+        monthExpenses.map((x) => (
+          <div className="ledger-row" key={x.id}>
+            <span className="ledger-date num">{x.date.slice(5)}</span>
+            <div className="ledger-main">
+              <span className="ledger-note">{x.note || x.category}</span>
+              <span className="ledger-cat">{x.category}</span>
+            </div>
+            <span className="ledger-amount num">{yen(x.amount)}</span>
+            <button className="del-btn" onClick={() => onDelete(x.id)} aria-label="Delete"><Trash2 size={15} /></button>
+          </div>
+        ))
+      )}
+      {monthExpenses.length > 0 && (
+        <div className="ledger-row" style={{ fontWeight: 700 }}>
+          <span></span>
+          <div className="ledger-main"><span className="ledger-note">Total</span></div>
+          <span className="ledger-amount num">{yen(total)}</span>
+          <span style={{ width: 23 }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BudgetTab({ budgets, spentByCategory, setBudgetFor }) {
+  return (
+    <div className="card">
+      <p className="card-title">Monthly Budget by Category</p>
+      {CATEGORIES.map((cat) => {
+        const b = Number(budgets[cat]) || 0;
+        const spent = spentByCategory[cat] || 0;
+        return (
+          <div className="budget-row" key={cat}>
+            <span className="cat-name">{cat}</span>
+            <div className="bar-wrap">
+              <ProgressBar value={spent} max={b} tone="green" />
+              <div className="bar-nums">
+                <span className="num">{yen(spent)} spent</span>
+                <span className="num">{b > 0 ? (b - spent >= 0 ? yen(b - spent) + " left" : yen(spent - b) + " over") : "no budget set"}</span>
+              </div>
+            </div>
+            <input
+              type="number"
+              min="0"
+              className="num"
+              placeholder="budget ¥"
+              defaultValue={budgets[cat] || ""}
+              onBlur={(e) => setBudgetFor(cat, e.target.value === "" ? 0 : Number(e.target.value))}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function HoursTab({ entries, totalPay, totalRegHours, totalOtHours, onAdd, onDelete, settings }) {
+  const [date, setDate] = useState(todayISO());
+  const [clockIn, setClockIn] = useState("09:00");
+  const [clockOut, setClockOut] = useState("18:00");
+  const [breakMin, setBreakMin] = useState(60);
+
+  function submit() {
+    if (!clockIn || !clockOut) return;
+    onAdd({ date, clockIn, clockOut, breakMin: Number(breakMin) || 0 });
+  }
+
+  return (
+    <>
+      <div className="card">
+        <p className="card-title">Log a Shift</p>
+        <div className="form-row">
+          <div className="field">
+            <label>Date</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Clock In</label>
+            <input type="time" value={clockIn} onChange={(e) => setClockIn(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Clock Out</label>
+            <input type="time" value={clockOut} onChange={(e) => setClockOut(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Break (min)</label>
+            <input className="num" type="number" min="0" value={breakMin} onChange={(e) => setBreakMin(e.target.value)} />
+          </div>
+          <button className="add-btn" onClick={submit}><Plus size={15} /> Add</button>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 10 }}>
+          Overtime kicks in past {settings.otThreshold}h/day at {settings.otMultiplier}× rate ({yen(settings.hourlyRate)}/hr base). Adjust in Settings.
+        </div>
+      </div>
+
+      <div className="stat-grid">
+        <div className="stat-box">
+          <div className="label">Regular Hours</div>
+          <div className="value num">{totalRegHours.toFixed(1)}h</div>
+        </div>
+        <div className="stat-box">
+          <div className="label">Overtime Hours</div>
+          <div className="value num" style={{ color: "var(--amber)" }}>{totalOtHours.toFixed(1)}h</div>
+        </div>
+        <div className="stat-box">
+          <div className="label">Total Pay</div>
+          <div className="value pos num">{yen(totalPay)}</div>
+        </div>
+      </div>
+
+      <div className="card ledger-panel">
+        <p className="card-title">This Month's Shifts</p>
+        {entries.length === 0 ? (
+          <div className="empty-state">No shifts logged yet — add one above.</div>
+        ) : (
+          entries.map((x) => (
+            <div className="ledger-row" key={x.id}>
+              <span className="ledger-date num">{x.date.slice(5)}</span>
+              <div className="ledger-main">
+                <span className="ledger-note">{x.clockIn}–{x.clockOut} · {x.breakMin}m break</span>
+                <span className="ledger-cat">
+                  {x.calc.reg.toFixed(1)}h reg{x.calc.ot > 0 ? ` + ${x.calc.ot.toFixed(1)}h OT` : ""}
+                </span>
+              </div>
+              <span className="ledger-amount num">{yen(x.calc.pay)}</span>
+              <button className="del-btn" onClick={() => onDelete(x.id)} aria-label="Delete"><Trash2 size={15} /></button>
+            </div>
+          ))
+        )}
+      </div>
+    </>
+  );
+}
+
+function SettingsTab({ settings, updateSettings }) {
+  const [rate, setRate] = useState(settings.hourlyRate);
+  const [threshold, setThreshold] = useState(settings.otThreshold);
+  const [mult, setMult] = useState(settings.otMultiplier);
+
+  return (
+    <div className="card">
+      <p className="card-title">Work Hours Rules</p>
+      <div className="settings-grid">
+        <div className="field">
+          <label>Base Hourly Rate (¥)</label>
+          <input className="num" type="number" min="0" value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            onBlur={() => updateSettings({ hourlyRate: Number(rate) || 0 })} />
+        </div>
+        <div className="field">
+          <label>Overtime Threshold (hours/day)</label>
+          <input className="num" type="number" min="0" step="0.5" value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+            onBlur={() => updateSettings({ otThreshold: Number(threshold) || 0 })} />
+        </div>
+        <div className="field">
+          <label>Overtime Multiplier</label>
+          <input className="num" type="number" min="1" step="0.05" value={mult}
+            onChange={(e) => setMult(e.target.value)}
+            onBlur={() => updateSettings({ otMultiplier: Number(mult) || 1 })} />
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 16 }}>
+        Japan's Labor Standards Act sets a standard baseline of 8 hours/day (40/week) before overtime pay applies,
+        with a statutory minimum premium of 1.25× — adjust these to match your actual contract.
+      </div>
+    </div>
+  );
+}
