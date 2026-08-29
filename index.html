@@ -129,7 +129,6 @@ function save(key, value) {
 }
 function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 
-// Migrate old string settings to structured workplace objects
 let rawSettings = load("kakeibo_settings", {});
 if (!rawSettings.workplaces || typeof rawSettings.workplaces === 'string') {
   const oldNames = typeof rawSettings.workplaces === 'string' ? rawSettings.workplaces.split(",") : ["LAWSON"];
@@ -147,19 +146,21 @@ const TABS = [
   { id: "settings", label: "Settings", jp: "設定" },
 ];
 
+// リロードしても状態を記憶させるためにlocalStorageを使用
 let state = {
-  tab: "hours",
-  month: todayISO().slice(0,7),
+  tab: localStorage.getItem("kakeibo_tab") || "hours",
+  month: localStorage.getItem("kakeibo_month") || todayISO().slice(0,7),
   expenses: load("kakeibo_expenses", []),
   budgets: load("kakeibo_budgets", {}),
   workEntries: load("kakeibo_workEntries", []),
   settings: rawSettings,
-  activePlaceId: null,
-  showHiddenShifts: false // 過去の完了シフトの表示トグル用
+  activePlaceId: localStorage.getItem("kakeibo_place") || null,
+  showHiddenShifts: false
 };
 
 if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w => w.id === state.activePlaceId)) {
   state.activePlaceId = state.settings.workplaces[0].id;
+  localStorage.setItem("kakeibo_place", state.activePlaceId);
 }
 
 // ---------- utils ----------
@@ -179,7 +180,6 @@ function shiftMonth(ym, delta) {
 }
 function esc(s) { const d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
 
-// 16日〜15日の期間取得ヘルパー
 function getPeriodDates(ym) {
   if (!ym) ym = todayISO().slice(0,7);
   const [y, m] = ym.split("-").map(Number);
@@ -386,7 +386,6 @@ function renderHours() {
   let displayShifts = [];
   let totalPay = 0, totalHours = 0, totalNight = 0;
 
-  // 1. まず16日〜15日のすべてのシフト（保存済み＋予定）を抽出・計算する
   for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
     const dateStr = toISO(d);
     const dayOfWeek = d.getDay();
@@ -396,7 +395,6 @@ function renderHours() {
     if (savedShiftsForDay.length > 0) {
       savedShiftsForDay.forEach(shift => {
         const calc = computeEntry(shift, activeWp.rate);
-        // 合計計算にはすべての完了シフトを含める（隠れているものも）
         if (shift.isCompleted) {
           totalPay += calc.pay; totalHours += calc.totalHours; totalNight += calc.nightHours;
         }
@@ -415,7 +413,6 @@ function renderHours() {
     }
   }
 
-  // 2. 「チェック済」かつ「過去の日付」のシフトをフィルタリングして表示制御
   let visibleShifts = [];
   let hiddenCount = 0;
 
@@ -566,13 +563,25 @@ function renderSettings() {
 // ---------- event handling ----------
 function attachHandlers() {
   document.querySelectorAll("[data-tab]").forEach(btn => {
-    btn.onclick = () => { state.tab = btn.dataset.tab; render(); };
+    btn.onclick = () => { 
+      state.tab = btn.dataset.tab; 
+      localStorage.setItem("kakeibo_tab", state.tab); // タブ状態の保存
+      render(); 
+    };
   });
   
   const prev = document.getElementById("prevMonth");
   const next = document.getElementById("nextMonth");
-  if (prev) prev.onclick = () => { state.month = shiftMonth(state.month, -1); render(); };
-  if (next) next.onclick = () => { state.month = shiftMonth(state.month, 1); render(); };
+  if (prev) prev.onclick = () => { 
+    state.month = shiftMonth(state.month, -1); 
+    localStorage.setItem("kakeibo_month", state.month); // 月状態の保存
+    render(); 
+  };
+  if (next) next.onclick = () => { 
+    state.month = shiftMonth(state.month, 1); 
+    localStorage.setItem("kakeibo_month", state.month); // 月状態の保存
+    render(); 
+  };
 
   const expForm = document.getElementById("expForm");
   if (expForm) expForm.onsubmit = (e) => {
@@ -590,10 +599,13 @@ function attachHandlers() {
   });
 
   document.querySelectorAll("[data-subtab]").forEach(btn => {
-    btn.onclick = () => { state.activePlaceId = btn.dataset.subtab; render(); };
+    btn.onclick = () => { 
+      state.activePlaceId = btn.dataset.subtab; 
+      localStorage.setItem("kakeibo_place", state.activePlaceId); // 勤務先タブ状態の保存
+      render(); 
+    };
   });
 
-  // 完了シフトの表示・非表示トグルボタン
   const toggleHiddenBtn = document.getElementById("toggleHiddenBtn");
   if (toggleHiddenBtn) {
     toggleHiddenBtn.onclick = () => {
@@ -644,13 +656,16 @@ function attachHandlers() {
   document.querySelectorAll(".edit-out").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'clockOut', false));
   document.querySelectorAll(".edit-brk").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'breakMin', false));
 
+  // 追加（Extra Shift）の処理強化
   const adForm = document.getElementById("addAdhocForm");
   if (adForm) {
     adForm.onsubmit = (e) => {
       e.preventDefault();
+      const adDate = document.getElementById("adDate").value;
+      
       state.workEntries.push({
         id: uid(), placeId: state.activePlaceId,
-        date: document.getElementById("adDate").value,
+        date: adDate,
         clockIn: document.getElementById("adIn").value,
         clockOut: document.getElementById("adOut").value,
         breakMin: Number(document.getElementById("adBreak").value) || 0,
@@ -658,6 +673,30 @@ function attachHandlers() {
         isAdhoc: true
       });
       save("kakeibo_workEntries", state.workEntries);
+
+      // 追加した日付が現在の表示期間外の場合、自動的にその月に移動する（16日〜15日サイクルの判定）
+      const [y, m, d] = adDate.split("-").map(Number);
+      let targetMonthStr;
+      if (d >= 16) {
+        let nextM = m + 1;
+        let nextY = y;
+        if (nextM > 12) { nextM = 1; nextY++; }
+        targetMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+      } else {
+        targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
+      }
+
+      if (state.month !== targetMonthStr) {
+        state.month = targetMonthStr;
+        localStorage.setItem('kakeibo_month', state.month);
+      }
+
+      // 過去の日付（今日より前）に追加した場合は非表示になっている可能性があるため強制表示
+      if (adDate < todayISO()) {
+        state.showHiddenShifts = true;
+      }
+
+      alert("追加シフトを保存しました！ ✅"); // 明確なフィードバック
       render();
     };
   }
