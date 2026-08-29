@@ -88,7 +88,6 @@
   .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
   .footer-note { text-align:center; font-size: 11px; color: var(--ink-soft); margin-top: 30px; letter-spacing: 0.04em; }
 
-  /* New Shift Styles */
   .shift-card { background: var(--paper-dark); padding: 14px; border-radius: 4px; border: 1px solid var(--rule); margin-bottom: 14px; }
   .day-chk { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:11px; cursor:pointer; }
   .shift-row { flex-wrap: wrap; border-radius: 4px; padding: 10px; margin-bottom: 8px; transition: all 0.2s ease; }
@@ -128,7 +127,7 @@ function load(key, fallback) {
 function save(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.error("save failed", key, e); }
 }
-function uid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
+function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 
 // Migrate old string settings to structured workplace objects
 let rawSettings = load("kakeibo_settings", {});
@@ -155,10 +154,10 @@ let state = {
   budgets: load("kakeibo_budgets", {}),
   workEntries: load("kakeibo_workEntries", []),
   settings: rawSettings,
-  activePlaceId: null
+  activePlaceId: null,
+  showHiddenShifts: false // 過去の完了シフトの表示トグル用
 };
 
-// Ensure activePlaceId is valid
 if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w => w.id === state.activePlaceId)) {
   state.activePlaceId = state.settings.workplaces[0].id;
 }
@@ -166,21 +165,35 @@ if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w =>
 // ---------- utils ----------
 function yen(n) { const v = Math.round(Number(n) || 0); return (v < 0 ? "-¥" : "¥") + Math.abs(v).toLocaleString("en-US"); }
 function todayISO() { return new Date().toISOString().slice(0,10); }
-function monthOf(d) { return d.slice(0,7); }
+function monthOf(d) { return d ? d.slice(0,7) : ""; }
 function formatMonth(ym) {
+  if (!ym) return "";
   const [y,m] = ym.split("-").map(Number);
   return new Date(y, m-1, 1).toLocaleDateString("en-US", { month:"long", year:"numeric" });
 }
 function shiftMonth(ym, delta) {
+  if (!ym) ym = todayISO().slice(0,7);
   const [y,m] = ym.split("-").map(Number);
   const d = new Date(y, m-1+delta, 1);
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
 }
 function esc(s) { const d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
-function getDayName(dateStr) { return DAYS[new Date(dateStr).getDay()]; }
 
-// --- Work Calculation (Includes 22:00-05:00 Night Premium & Break Deduction) ---
+// 16日〜15日の期間取得ヘルパー
+function getPeriodDates(ym) {
+  if (!ym) ym = todayISO().slice(0,7);
+  const [y, m] = ym.split("-").map(Number);
+  const startD = new Date(y, m - 2, 16);
+  const endD = new Date(y, m - 1, 15);
+  return { startD, endD };
+}
+function toISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// --- Work Calculation ---
 function computeEntry(entry, customRate = null) {
+  if (!entry || !entry.clockIn || !entry.clockOut) return { totalHours: 0, nightHours: 0, pay: 0 };
   const [inH,inM] = entry.clockIn.split(":").map(Number);
   const [outH,outM] = entry.clockOut.split(":").map(Number);
   const rate = customRate || Number(entry.rate) || 0;
@@ -223,7 +236,7 @@ function pbarHTML(value, max) {
   return `<div class="pbar-track"><div class="pbar-fill" style="width:${pct}%;background:${color}"></div></div>`;
 }
 
-function getMonthExpenses() { return state.expenses.filter(x => monthOf(x.date) === state.month).sort((a,b)=> a.date > b.date ? 1 : -1); }
+function getMonthExpenses() { return state.expenses.filter(x => x && monthOf(x.date) === state.month).sort((a,b)=> a.date > b.date ? 1 : -1); }
 
 // ---------- render ----------
 function render() {
@@ -254,13 +267,18 @@ function monthNavHTML() {
     </div>`;
 }
 
-// --- Dashboard & Expenses & Budget (Omitted details for brevity but fully functional) ---
 function renderDashboard() {
   const monthExpenses = getMonthExpenses();
-  const completedWork = state.workEntries.filter(x => monthOf(x.date) === state.month && x.isCompleted).map(e => Object.assign({}, e, { calc: computeEntry(e) }));
+  const { startD, endD } = getPeriodDates(state.month);
+  const startDateStr = toISO(startD);
+  const endDateStr = toISO(endD);
+
+  const completedWork = state.workEntries
+    .filter(x => x && x.date >= startDateStr && x.date <= endDateStr && x.isCompleted)
+    .map(e => Object.assign({}, e, { calc: computeEntry(e, state.settings.workplaces.find(w=>w.id===e.placeId)?.rate) }));
   
   const totalExpenses = monthExpenses.reduce((s,x)=>s+Number(x.amount),0);
-  const totalPay = completedWork.reduce((s,x)=>s+x.calc.pay,0);
+  const totalPay = completedWork.reduce((s,x)=>s+(x.calc?x.calc.pay:0),0);
   const balance = totalPay - totalExpenses;
   const budgetTotal = Object.values(state.budgets).reduce((s,v)=>s+(Number(v)||0),0);
   const status = budgetTotal > 0 ? (totalExpenses > budgetTotal ? "over" : "good") : "neutral";
@@ -288,7 +306,7 @@ function renderDashboard() {
     ${monthNavHTML()}
     <div class="dash-header">
       <div class="stat-grid" style="flex:1">
-        <div class="stat-box"><div class="label">Income</div><div class="value pos num">${yen(totalPay)}</div></div>
+        <div class="stat-box"><div class="label">Income (${startD.getMonth()+1}/16 - ${endD.getMonth()+1}/15)</div><div class="value pos num">${yen(totalPay)}</div></div>
         <div class="stat-box"><div class="label">Expenses</div><div class="value neg num">${yen(totalExpenses)}</div></div>
         <div class="stat-box"><div class="label">Balance</div><div class="value num ${balance>=0?'pos':'neg'}">${yen(balance)}</div></div>
       </div>
@@ -347,13 +365,11 @@ function renderBudget() {
   return `${monthNavHTML()}<div class="card"><p class="card-title">Monthly Budget</p>${rows}</div>`;
 }
 
-// --- NEW WORKING HOURS ---
 function renderHours() {
   if (state.settings.workplaces.length === 0) {
     return `<div class="empty-state" style="margin-top:40px;">No workplaces setup. Go to Settings first!</div>`;
   }
 
-  // Sub-tabs for Workplaces
   const subTabsHtml = `
     <div style="display:flex; gap:2px; margin-bottom:16px; border-bottom: 2px solid var(--ink);">
       ${state.settings.workplaces.map(w => `
@@ -364,31 +380,29 @@ function renderHours() {
     </div>`;
 
   const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-  const [year, month] = state.month.split("-").map(Number);
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const { startD, endD } = getPeriodDates(state.month);
+  const todayStr = todayISO();
 
-  // Combine saved shifts and auto-generated scheduled shifts
   let displayShifts = [];
   let totalPay = 0, totalHours = 0, totalNight = 0;
 
-  for (let i = 1; i <= daysInMonth; i++) {
-    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-    const dayOfWeek = new Date(year, month - 1, i).getDay();
+  // 1. まず16日〜15日のすべてのシフト（保存済み＋予定）を抽出・計算する
+  for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+    const dateStr = toISO(d);
+    const dayOfWeek = d.getDay();
     
-    // Check if an entry is saved for this specific date & workplace
-    const savedShiftsForDay = state.workEntries.filter(x => x.date === dateStr && x.placeId === activeWp.id);
+    const savedShiftsForDay = state.workEntries.filter(x => x && x.date === dateStr && x.placeId === activeWp.id);
     
     if (savedShiftsForDay.length > 0) {
-      // Add all saved shifts (allows multiple shifts per day if user added ad-hoc)
       savedShiftsForDay.forEach(shift => {
         const calc = computeEntry(shift, activeWp.rate);
+        // 合計計算にはすべての完了シフトを含める（隠れているものも）
         if (shift.isCompleted) {
           totalPay += calc.pay; totalHours += calc.totalHours; totalNight += calc.nightHours;
         }
         displayShifts.push({ ...shift, calc, dayName: DAYS[dayOfWeek] });
       });
     } else {
-      // If no shift saved, check if this day is part of the recurring schedule
       if (activeWp.activeDays.includes(dayOfWeek)) {
         const virtualShift = {
           id: `virtual-${dateStr}`, placeId: activeWp.id, date: dateStr,
@@ -401,12 +415,36 @@ function renderHours() {
     }
   }
 
-  const ledgerRows = displayShifts.length === 0
-    ? `<div class="empty-state">No scheduled shifts for this month. Adjust Settings or add an extra shift below.</div>`
-    : displayShifts.map(x => {
+  // 2. 「チェック済」かつ「過去の日付」のシフトをフィルタリングして表示制御
+  let visibleShifts = [];
+  let hiddenCount = 0;
+
+  displayShifts.forEach(x => {
+    if (x.isCompleted && x.date < todayStr) {
+      if (state.showHiddenShifts) {
+        visibleShifts.push(x);
+      } else {
+        hiddenCount++;
+      }
+    } else {
+      visibleShifts.push(x);
+    }
+  });
+
+  const toggleHiddenHtml = (hiddenCount > 0 || state.showHiddenShifts) ? `
+    <div style="text-align: center; margin-bottom: 12px;">
+      <button id="toggleHiddenBtn" style="background:transparent; border:1px dashed var(--rule); color:var(--ink-soft); padding:6px 12px; border-radius:4px; font-size:11px; cursor:pointer;">
+        ${state.showHiddenShifts ? "🙈 過去の完了シフトを隠す" : `👁️ 過去の完了シフト (${hiddenCount}件) を表示`}
+      </button>
+    </div>
+  ` : "";
+
+  const ledgerRows = visibleShifts.length === 0
+    ? `<div class="empty-state">No scheduled shifts to display.</div>`
+    : visibleShifts.map(x => {
         let rowClass = "shift-virtual";
         if (x.isCompleted && !x.isAdhoc) rowClass = "shift-completed";
-        if (x.isAdhoc) rowClass = "shift-adhoc"; // The extra ad-hoc color
+        if (x.isAdhoc) rowClass = "shift-adhoc";
 
         return `
         <div class="ledger-row shift-row ${rowClass}">
@@ -417,10 +455,10 @@ function renderHours() {
               <span style="font-size:10px; color:var(--ink-soft);">${x.dayName}</span>
             </div>
             <div style="display:flex; gap:4px; flex:1; align-items:center;">
-              <input type="time" class="num edit-in" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.clockIn}" step="60" style="width:85px; padding:4px;">
+              <input type="time" class="num edit-in" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.clockIn || ''}" step="60" style="width:85px; padding:4px;">
               <span style="color:var(--ink-soft)">-</span>
-              <input type="time" class="num edit-out" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.clockOut}" step="60" style="width:85px; padding:4px;">
-              <input type="number" class="num edit-brk" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.breakMin}" step="1" style="width:50px; padding:4px;" title="Break(min)">
+              <input type="time" class="num edit-out" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.clockOut || ''}" step="60" style="width:85px; padding:4px;">
+              <input type="number" class="num edit-brk" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.breakMin || 0}" step="1" style="width:50px; padding:4px;" title="Break(min)">
             </div>
             <span class="ledger-amount num" style="opacity: ${x.isCompleted ? '1' : '0.4'}">${yen(x.calc.pay)}</span>
             ${!x.isVirtual ? `<button type="button" class="del-btn" data-del-work="${x.id}">✕</button>` : `<div style="width:28px;"></div>`}
@@ -435,18 +473,13 @@ function renderHours() {
     ${monthNavHTML()}
     ${subTabsHtml}
 
-    <div class="stat-grid">
-      <div class="stat-box"><div class="label">Total hours</div><div class="value num">${totalHours.toFixed(1)}h</div></div>
-      <div class="stat-box"><div class="label">LATE NIGHT</div><div class="value num" style="color:var(--amber)">${totalNight.toFixed(1)}h</div></div>
-      <div class="stat-box"><div class="label">Total pay</div><div class="value pos num">${yen(totalPay)}</div></div>
-    </div>
-    
     <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
-      * Only shifts marked with a ✅ are included in the totals.
+      * Displaying shifts from ${startD.getMonth()+1}/16 to ${endD.getMonth()+1}/15
     </div>
 
     <div style="padding: 12px 0;">
       <p class="card-title">Calendar & Shifts (${esc(activeWp.name)})</p>
+      ${toggleHiddenHtml}
       ${ledgerRows}
     </div>
 
@@ -460,10 +493,19 @@ function renderHours() {
         <div class="field"><label>Break</label><input type="number" min="0" id="adBreak" value="0" step="1" class="num" style="width:60px"></div>
         <button type="submit" class="add-btn" style="background:var(--ink);">+ Add</button>
       </form>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-box"><div class="label">Total hours</div><div class="value num">${totalHours.toFixed(1)}h</div></div>
+      <div class="stat-box"><div class="label">LATE NIGHT</div><div class="value num" style="color:var(--amber)">${totalNight.toFixed(1)}h</div></div>
+      <div class="stat-box"><div class="label">Total pay</div><div class="value pos num">${yen(totalPay)}</div></div>
+    </div>
+    
+    <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
+      * Only shifts marked with a ✅ are included in the totals. Paid end of month.
     </div>`;
 }
 
-// --- NEW SETTINGS (Workplace Schedule Setup) ---
 function renderSettings() {
   const wpRows = state.settings.workplaces.map((w, idx) => {
     return `
@@ -500,7 +542,7 @@ function renderSettings() {
         <button class="add-btn" id="addWpBtn" style="font-size:11px; padding:4px 8px; height:auto;">+ New Workplace</button>
       </div>
       <div style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">
-        Define your basic shift pattern here. The Working Hours tab will automatically generate calendar entries for these days infinitely.
+        Define your basic shift pattern here. The Working Hours tab will automatically generate calendar entries for these days.
       </div>
       <form id="wpSettingsForm">
         ${wpRows || '<div class="empty-state">No workplaces. Add one above.</div>'}
@@ -532,26 +574,34 @@ function attachHandlers() {
   if (prev) prev.onclick = () => { state.month = shiftMonth(state.month, -1); render(); };
   if (next) next.onclick = () => { state.month = shiftMonth(state.month, 1); render(); };
 
-  // --- Expenses & Budget Handlers (Omitted for brevity, functionally identical) ---
   const expForm = document.getElementById("expForm");
   if (expForm) expForm.onsubmit = (e) => {
     e.preventDefault();
     state.expenses.push({ id: uid(), date: document.getElementById("expDate").value, category: document.getElementById("expCategory").value, amount: Number(document.getElementById("expAmount").value), note: document.getElementById("expNote").value.trim() });
     save("kakeibo_expenses", state.expenses); render();
   };
+  
   document.querySelectorAll("[data-del-expense]").forEach(btn => btn.onclick = () => {
       if(confirm("Delete this expense?")) { state.expenses = state.expenses.filter(x => x.id !== btn.dataset.delExpense); save("kakeibo_expenses", state.expenses); render(); }
   });
+  
   document.querySelectorAll("[data-budget-cat]").forEach(inp => inp.onblur = () => {
       state.budgets[inp.dataset.budgetCat] = inp.value === "" ? 0 : Number(inp.value); save("kakeibo_budgets", state.budgets);
   });
 
-  // --- HOURS TAB HANDLERS ---
   document.querySelectorAll("[data-subtab]").forEach(btn => {
     btn.onclick = () => { state.activePlaceId = btn.dataset.subtab; render(); };
   });
 
-  // Handles updating both saved shifts AND interacting with "Virtual" (un-saved) scheduled shifts
+  // 完了シフトの表示・非表示トグルボタン
+  const toggleHiddenBtn = document.getElementById("toggleHiddenBtn");
+  if (toggleHiddenBtn) {
+    toggleHiddenBtn.onclick = () => {
+      state.showHiddenShifts = !state.showHiddenShifts;
+      render();
+    };
+  }
+
   const handleShiftInteraction = (target, field, isCheckbox) => {
     const isVirtual = target.dataset.virtual === "true";
     const date = target.dataset.date;
@@ -559,20 +609,18 @@ function attachHandlers() {
     const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
 
     if (isVirtual) {
-      // Create a real entry from the virtual schedule
       const row = target.closest('.shift-row');
       const inVal = row.querySelector('.edit-in').value;
       const outVal = row.querySelector('.edit-out').value;
       const brkVal = Number(row.querySelector('.edit-brk').value);
-      const isComp = row.querySelector('.shift-done').checked; // if they clicked time, maybe it's not complete yet, respect the checkbox
+      const isComp = row.querySelector('.shift-done').checked;
 
       const newShift = {
         id: uid(), placeId: activeWp.id, date: date,
         clockIn: inVal, clockOut: outVal, breakMin: brkVal,
-        isCompleted: isComp, isAdhoc: false // It's from schedule, not adhoc
+        isCompleted: isComp, isAdhoc: false 
       };
       
-      // Override specific field being interacted with just to be safe
       if(field === 'isCompleted') newShift.isCompleted = val;
       if(field === 'clockIn') newShift.clockIn = val;
       if(field === 'clockOut') newShift.clockOut = val;
@@ -582,7 +630,6 @@ function attachHandlers() {
       save("kakeibo_workEntries", state.workEntries);
       render();
     } else {
-      // Update existing saved shift
       const shift = state.workEntries.find(x => x.id === target.dataset.id);
       if (shift) {
         shift[field] = field === 'breakMin' ? Number(val) : val;
@@ -597,7 +644,6 @@ function attachHandlers() {
   document.querySelectorAll(".edit-out").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'clockOut', false));
   document.querySelectorAll(".edit-brk").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'breakMin', false));
 
-  // Ad-hoc Extra Shift
   const adForm = document.getElementById("addAdhocForm");
   if (adForm) {
     adForm.onsubmit = (e) => {
@@ -608,7 +654,7 @@ function attachHandlers() {
         clockIn: document.getElementById("adIn").value,
         clockOut: document.getElementById("adOut").value,
         breakMin: Number(document.getElementById("adBreak").value) || 0,
-        isCompleted: true, // Ad-hoc is usually added after the fact
+        isCompleted: true, 
         isAdhoc: true
       });
       save("kakeibo_workEntries", state.workEntries);
@@ -616,17 +662,15 @@ function attachHandlers() {
     };
   }
 
-  // Delete actual saved shift (Virtual shifts can't be deleted, just unchecked)
   document.querySelectorAll("[data-del-work]").forEach(btn => {
     btn.onclick = () => {
-      if (!confirm("Delete this saved shift? (If it's part of a schedule, it will revert to an uncompleted state).")) return;
+      if (!confirm("Delete this saved shift?")) return;
       state.workEntries = state.workEntries.filter(x => x.id !== btn.dataset.delWork);
       save("kakeibo_workEntries", state.workEntries);
       render();
     };
   });
 
-  // --- SETTINGS TAB HANDLERS ---
   const addWpBtn = document.getElementById("addWpBtn");
   if (addWpBtn) {
     addWpBtn.onclick = () => {
@@ -637,7 +681,7 @@ function attachHandlers() {
 
   document.querySelectorAll(".del-wp-btn").forEach(btn => {
     btn.onclick = () => {
-      if(!confirm("Are you sure? This will remove the workplace template. (Existing shifts will remain in data, but might not display correctly).")) return;
+      if(!confirm("Are you sure?")) return;
       state.settings.workplaces = state.settings.workplaces.filter(w => w.id !== btn.dataset.id);
       save("kakeibo_settings", state.settings);
       render();
@@ -656,7 +700,6 @@ function attachHandlers() {
         wp.defaultOut = card.querySelector(".wp-out").value;
         wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
         
-        // Collect checked days
         wp.activeDays = [];
         card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
       });
@@ -665,7 +708,6 @@ function attachHandlers() {
     };
   }
 
-  // --- Backup & Restore ---
   const downloadBtn = document.getElementById("downloadBackup");
   if (downloadBtn) downloadBtn.onclick = () => {
     const payload = { expenses: state.expenses, budgets: state.budgets, workEntries: state.workEntries, settings: state.settings, exportedAt: new Date().toISOString() };
