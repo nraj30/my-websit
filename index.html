@@ -88,6 +88,7 @@
   .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
   .footer-note { text-align:center; font-size: 11px; color: var(--ink-soft); margin-top: 30px; letter-spacing: 0.04em; }
 
+  /* New Shift Styles */
   .shift-card { background: var(--paper-dark); padding: 14px; border-radius: 4px; border: 1px solid var(--rule); margin-bottom: 14px; }
   .day-chk { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:11px; cursor:pointer; }
   .shift-row { flex-wrap: wrap; border-radius: 4px; padding: 10px; margin-bottom: 8px; transition: all 0.2s ease; }
@@ -129,13 +130,20 @@ function save(key, value) {
 }
 function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 
+// Data migration: add payCycle if missing
 let rawSettings = load("kakeibo_settings", {});
 if (!rawSettings.workplaces || typeof rawSettings.workplaces === 'string') {
   const oldNames = typeof rawSettings.workplaces === 'string' ? rawSettings.workplaces.split(",") : ["LAWSON"];
   rawSettings.workplaces = oldNames.map(n => ({
-    id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: []
+    id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16"
   }));
   save("kakeibo_settings", rawSettings);
+} else {
+  let needsSave = false;
+  rawSettings.workplaces.forEach(w => {
+    if (!w.payCycle) { w.payCycle = "16"; needsSave = true; }
+  });
+  if (needsSave) save("kakeibo_settings", rawSettings);
 }
 
 const TABS = [
@@ -146,7 +154,6 @@ const TABS = [
   { id: "settings", label: "Settings", jp: "設定" },
 ];
 
-// リロードしても状態を記憶させるためにlocalStorageを使用
 let state = {
   tab: localStorage.getItem("kakeibo_tab") || "hours",
   month: localStorage.getItem("kakeibo_month") || todayISO().slice(0,7),
@@ -180,12 +187,20 @@ function shiftMonth(ym, delta) {
 }
 function esc(s) { const d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
 
-function getPeriodDates(ym) {
+// Updated Date Calculation based on Pay Cycle
+function getPeriodDates(ym, cycle) {
   if (!ym) ym = todayISO().slice(0,7);
   const [y, m] = ym.split("-").map(Number);
-  const startD = new Date(y, m - 2, 16);
-  const endD = new Date(y, m - 1, 15);
-  return { startD, endD };
+  if (cycle === "1") {
+    // 1st to end of month
+    return { startD: new Date(y, m - 1, 1), endD: new Date(y, m, 0) };
+  } else if (cycle === "15") {
+    // 15th to 14th
+    return { startD: new Date(y, m - 2, 15), endD: new Date(y, m - 1, 14) };
+  } else {
+    // 16th to 15th (Default)
+    return { startD: new Date(y, m - 2, 16), endD: new Date(y, m - 1, 15) };
+  }
 }
 function toISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -269,16 +284,19 @@ function monthNavHTML() {
 
 function renderDashboard() {
   const monthExpenses = getMonthExpenses();
-  const { startD, endD } = getPeriodDates(state.month);
-  const startDateStr = toISO(startD);
-  const endDateStr = toISO(endD);
-
-  const completedWork = state.workEntries
-    .filter(x => x && x.date >= startDateStr && x.date <= endDateStr && x.isCompleted)
-    .map(e => Object.assign({}, e, { calc: computeEntry(e, state.settings.workplaces.find(w=>w.id===e.placeId)?.rate) }));
+  
+  // Calculate total pay dynamically based on each workplace's distinct pay cycle
+  let totalPay = 0;
+  state.settings.workplaces.forEach(wp => {
+    const { startD, endD } = getPeriodDates(state.month, wp.payCycle);
+    const startStr = toISO(startD);
+    const endStr = toISO(endD);
+    
+    const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && x.date >= startStr && x.date <= endStr);
+    totalPay += wpShifts.reduce((s,x) => s + (computeEntry(x, wp.rate).pay), 0);
+  });
   
   const totalExpenses = monthExpenses.reduce((s,x)=>s+Number(x.amount),0);
-  const totalPay = completedWork.reduce((s,x)=>s+(x.calc?x.calc.pay:0),0);
   const balance = totalPay - totalExpenses;
   const budgetTotal = Object.values(state.budgets).reduce((s,v)=>s+(Number(v)||0),0);
   const status = budgetTotal > 0 ? (totalExpenses > budgetTotal ? "over" : "good") : "neutral";
@@ -306,7 +324,7 @@ function renderDashboard() {
     ${monthNavHTML()}
     <div class="dash-header">
       <div class="stat-grid" style="flex:1">
-        <div class="stat-box"><div class="label">Income (${startD.getMonth()+1}/16 - ${endD.getMonth()+1}/15)</div><div class="value pos num">${yen(totalPay)}</div></div>
+        <div class="stat-box"><div class="label">Income (All Workplaces)</div><div class="value pos num">${yen(totalPay)}</div></div>
         <div class="stat-box"><div class="label">Expenses</div><div class="value neg num">${yen(totalExpenses)}</div></div>
         <div class="stat-box"><div class="label">Balance</div><div class="value num ${balance>=0?'pos':'neg'}">${yen(balance)}</div></div>
       </div>
@@ -380,7 +398,7 @@ function renderHours() {
     </div>`;
 
   const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-  const { startD, endD } = getPeriodDates(state.month);
+  const { startD, endD } = getPeriodDates(state.month, activeWp.payCycle);
   const todayStr = todayISO();
 
   let displayShifts = [];
@@ -471,7 +489,7 @@ function renderHours() {
     ${subTabsHtml}
 
     <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
-      * Displaying shifts from ${startD.getMonth()+1}/16 to ${endD.getMonth()+1}/15
+      * Displaying shifts from ${startD.getMonth()+1}/${startD.getDate()} to ${endD.getMonth()+1}/${endD.getDate()}
     </div>
 
     <div style="padding: 12px 0;">
@@ -481,8 +499,8 @@ function renderHours() {
     </div>
 
     <div class="card shift-adhoc" style="margin-top: 16px;">
-      <p class="card-title" style="color: var(--ink);">+ Add Extra Shift (Ad-hoc)</p>
-      <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px;">Use this to add a shift on a day you don't normally work.</div>
+      <p class="card-title" style="color: var(--ink);">+ Add Single Shift (指定日に追加)</p>
+      <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px;">Use this to add a shift on a specific day one by one.</div>
       <form class="form-row" id="addAdhocForm">
         <div class="field"><label>Date</label><input type="date" id="adDate" value="${todayISO()}" required></div>
         <div class="field"><label>In</label><input type="time" id="adIn" value="10:00" step="60" required></div>
@@ -499,7 +517,7 @@ function renderHours() {
     </div>
     
     <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
-      * Only shifts marked with a ✅ are included in the totals. Paid end of month.
+      * Only shifts marked with a ✅ are included in the totals. Paid end of cycle.
     </div>`;
 }
 
@@ -515,6 +533,15 @@ function renderSettings() {
           <div class="field"><label>Default IN</label><input type="time" class="wp-in num" value="${w.defaultIn}" step="60"></div>
           <div class="field"><label>Default OUT</label><input type="time" class="wp-out num" value="${w.defaultOut}" step="60"></div>
           <div class="field"><label>Default BREAK(m)</label><input type="number" class="wp-brk num" value="${w.defaultBreak}" step="1" style="width:80px"></div>
+        </div>
+        <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
+          <div class="field" style="width: 100%;">
+            <label>PAY CYCLE (給与サイクル)</label>
+            <select class="wp-cycle">
+              <option value="1" ${w.payCycle === "1" ? 'selected' : ''}>1st - End of Month (1日〜月末)</option>
+              <option value="16" ${w.payCycle === "16" ? 'selected' : ''}>16th - 15th (15日締め/16日開始)</option>
+            </select>
+          </div>
         </div>
         <div style="border-top: 1px dashed var(--rule); margin: 12px 0;"></div>
         <label style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); font-weight: bold; display:block; margin-bottom:8px;">REPEAT (EVERY WEEK)</label>
@@ -565,7 +592,7 @@ function attachHandlers() {
   document.querySelectorAll("[data-tab]").forEach(btn => {
     btn.onclick = () => { 
       state.tab = btn.dataset.tab; 
-      localStorage.setItem("kakeibo_tab", state.tab); // タブ状態の保存
+      localStorage.setItem("kakeibo_tab", state.tab);
       render(); 
     };
   });
@@ -574,12 +601,12 @@ function attachHandlers() {
   const next = document.getElementById("nextMonth");
   if (prev) prev.onclick = () => { 
     state.month = shiftMonth(state.month, -1); 
-    localStorage.setItem("kakeibo_month", state.month); // 月状態の保存
+    localStorage.setItem("kakeibo_month", state.month);
     render(); 
   };
   if (next) next.onclick = () => { 
     state.month = shiftMonth(state.month, 1); 
-    localStorage.setItem("kakeibo_month", state.month); // 月状態の保存
+    localStorage.setItem("kakeibo_month", state.month);
     render(); 
   };
 
@@ -601,7 +628,7 @@ function attachHandlers() {
   document.querySelectorAll("[data-subtab]").forEach(btn => {
     btn.onclick = () => { 
       state.activePlaceId = btn.dataset.subtab; 
-      localStorage.setItem("kakeibo_place", state.activePlaceId); // 勤務先タブ状態の保存
+      localStorage.setItem("kakeibo_place", state.activePlaceId);
       render(); 
     };
   });
@@ -656,12 +683,13 @@ function attachHandlers() {
   document.querySelectorAll(".edit-out").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'clockOut', false));
   document.querySelectorAll(".edit-brk").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'breakMin', false));
 
-  // 追加（Extra Shift）の処理強化
+  // 1日ずつ追加するフォーム
   const adForm = document.getElementById("addAdhocForm");
   if (adForm) {
     adForm.onsubmit = (e) => {
       e.preventDefault();
       const adDate = document.getElementById("adDate").value;
+      const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
       
       state.workEntries.push({
         id: uid(), placeId: state.activePlaceId,
@@ -669,21 +697,34 @@ function attachHandlers() {
         clockIn: document.getElementById("adIn").value,
         clockOut: document.getElementById("adOut").value,
         breakMin: Number(document.getElementById("adBreak").value) || 0,
-        isCompleted: true, 
+        isCompleted: false,
         isAdhoc: true
       });
       save("kakeibo_workEntries", state.workEntries);
 
-      // 追加した日付が現在の表示期間外の場合、自動的にその月に移動する（16日〜15日サイクルの判定）
+      // 自動で対象の月へ遷移する処理
       const [y, m, d] = adDate.split("-").map(Number);
-      let targetMonthStr;
-      if (d >= 16) {
-        let nextM = m + 1;
-        let nextY = y;
-        if (nextM > 12) { nextM = 1; nextY++; }
-        targetMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
-      } else {
+      let targetMonthStr = state.month;
+      const cycle = activeWp.payCycle;
+
+      if (cycle === "1") {
         targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
+      } else if (cycle === "15") {
+        if (d >= 15) {
+          let nextM = m + 1; let nextY = y;
+          if (nextM > 12) { nextM = 1; nextY++; }
+          targetMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+        } else {
+          targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
+        }
+      } else {
+        if (d >= 16) {
+          let nextM = m + 1; let nextY = y;
+          if (nextM > 12) { nextM = 1; nextY++; }
+          targetMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
+        } else {
+          targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
+        }
       }
 
       if (state.month !== targetMonthStr) {
@@ -691,12 +732,11 @@ function attachHandlers() {
         localStorage.setItem('kakeibo_month', state.month);
       }
 
-      // 過去の日付（今日より前）に追加した場合は非表示になっている可能性があるため強制表示
       if (adDate < todayISO()) {
         state.showHiddenShifts = true;
       }
 
-      alert("追加シフトを保存しました！ ✅"); // 明確なフィードバック
+      alert("単発シフトを追加しました！ ✅");
       render();
     };
   }
@@ -713,7 +753,7 @@ function attachHandlers() {
   const addWpBtn = document.getElementById("addWpBtn");
   if (addWpBtn) {
     addWpBtn.onclick = () => {
-      state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [] });
+      state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [], payCycle: "16" });
       render();
     };
   }
@@ -738,6 +778,7 @@ function attachHandlers() {
         wp.defaultIn = card.querySelector(".wp-in").value;
         wp.defaultOut = card.querySelector(".wp-out").value;
         wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
+        wp.payCycle = card.querySelector(".wp-cycle").value || "16"; // Save Pay Cycle
         
         wp.activeDays = [];
         card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
