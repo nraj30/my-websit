@@ -130,18 +130,19 @@ function save(key, value) {
 }
 function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 
-// Data migration: add payCycle if missing
+// Data migration: add payCycle & transportCost if missing
 let rawSettings = load("kakeibo_settings", {});
 if (!rawSettings.workplaces || typeof rawSettings.workplaces === 'string') {
   const oldNames = typeof rawSettings.workplaces === 'string' ? rawSettings.workplaces.split(",") : ["LAWSON"];
   rawSettings.workplaces = oldNames.map(n => ({
-    id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16"
+    id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16", transportCost: 0
   }));
   save("kakeibo_settings", rawSettings);
 } else {
   let needsSave = false;
   rawSettings.workplaces.forEach(w => {
     if (!w.payCycle) { w.payCycle = "16"; needsSave = true; }
+    if (w.transportCost === undefined) { w.transportCost = 0; needsSave = true; }
   });
   if (needsSave) save("kakeibo_settings", rawSettings);
 }
@@ -192,13 +193,10 @@ function getPeriodDates(ym, cycle) {
   if (!ym) ym = todayISO().slice(0,7);
   const [y, m] = ym.split("-").map(Number);
   if (cycle === "1") {
-    // 1st to end of month
     return { startD: new Date(y, m - 1, 1), endD: new Date(y, m, 0) };
   } else if (cycle === "15") {
-    // 15th to 14th
     return { startD: new Date(y, m - 2, 15), endD: new Date(y, m - 1, 14) };
   } else {
-    // 16th to 15th (Default)
     return { startD: new Date(y, m - 2, 16), endD: new Date(y, m - 1, 15) };
   }
 }
@@ -206,8 +204,8 @@ function toISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// --- Work Calculation ---
-function computeEntry(entry, customRate = null) {
+// --- Work Calculation (交通費を加算するように修正) ---
+function computeEntry(entry, customRate = null, transportCost = 0) {
   if (!entry || !entry.clockIn || !entry.clockOut) return { totalHours: 0, nightHours: 0, pay: 0 };
   const [inH,inM] = entry.clockIn.split(":").map(Number);
   const [outH,outM] = entry.clockOut.split(":").map(Number);
@@ -235,7 +233,8 @@ function computeEntry(entry, customRate = null) {
   }
 
   const totalHours = (regMin + nightMin) / 60;
-  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25);
+  // 給料に交通費を足す
+  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25) + transportCost;
   
   return { totalHours, nightHours: nightMin / 60, pay };
 }
@@ -284,16 +283,15 @@ function monthNavHTML() {
 
 function renderDashboard() {
   const monthExpenses = getMonthExpenses();
-  
-  // Calculate total pay dynamically based on each workplace's distinct pay cycle
   let totalPay = 0;
+  
   state.settings.workplaces.forEach(wp => {
     const { startD, endD } = getPeriodDates(state.month, wp.payCycle);
     const startStr = toISO(startD);
     const endStr = toISO(endD);
     
     const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && x.date >= startStr && x.date <= endStr);
-    totalPay += wpShifts.reduce((s,x) => s + (computeEntry(x, wp.rate).pay), 0);
+    totalPay += wpShifts.reduce((s,x) => s + (computeEntry(x, wp.rate, wp.transportCost).pay), 0);
   });
   
   const totalExpenses = monthExpenses.reduce((s,x)=>s+Number(x.amount),0);
@@ -412,7 +410,7 @@ function renderHours() {
     
     if (savedShiftsForDay.length > 0) {
       savedShiftsForDay.forEach(shift => {
-        const calc = computeEntry(shift, activeWp.rate);
+        const calc = computeEntry(shift, activeWp.rate, activeWp.transportCost);
         if (shift.isCompleted) {
           totalPay += calc.pay; totalHours += calc.totalHours; totalNight += calc.nightHours;
         }
@@ -425,7 +423,7 @@ function renderHours() {
           clockIn: activeWp.defaultIn, clockOut: activeWp.defaultOut, breakMin: activeWp.defaultBreak,
           isCompleted: false, isVirtual: true, isAdhoc: false
         };
-        virtualShift.calc = computeEntry(virtualShift, activeWp.rate);
+        virtualShift.calc = computeEntry(virtualShift, activeWp.rate, activeWp.transportCost);
         displayShifts.push({ ...virtualShift, dayName: DAYS[dayOfWeek] });
       }
     }
@@ -535,12 +533,17 @@ function renderSettings() {
           <div class="field"><label>Default BREAK(m)</label><input type="number" class="wp-brk num" value="${w.defaultBreak}" step="1" style="width:80px"></div>
         </div>
         <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
-          <div class="field" style="width: 100%;">
+          <div class="field" style="width: 100%; max-width: 250px;">
             <label>PAY CYCLE (給与サイクル)</label>
             <select class="wp-cycle">
               <option value="1" ${w.payCycle === "1" ? 'selected' : ''}>1st - End of Month (1日〜月末)</option>
+              <option value="15" ${w.payCycle === "15" ? 'selected' : ''}>15th - 14th (15日締め)</option>
               <option value="16" ${w.payCycle === "16" ? 'selected' : ''}>16th - 15th (15日締め/16日開始)</option>
             </select>
+          </div>
+          <div class="field" style="width: 100%; max-width: 150px;">
+            <label>TRANSPORT (¥ / 交通費)</label>
+            <input type="number" class="wp-trans num" value="${w.transportCost || 0}" placeholder="0">
           </div>
         </div>
         <div style="border-top: 1px dashed var(--rule); margin: 12px 0;"></div>
@@ -647,6 +650,8 @@ function attachHandlers() {
     const val = isCheckbox ? target.checked : target.value;
     const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
 
+    let targetShiftId;
+
     if (isVirtual) {
       const row = target.closest('.shift-row');
       const inVal = row.querySelector('.edit-in').value;
@@ -665,17 +670,41 @@ function attachHandlers() {
       if(field === 'clockOut') newShift.clockOut = val;
       if(field === 'breakMin') newShift.breakMin = Number(val);
 
+      targetShiftId = newShift.id;
       state.workEntries.push(newShift);
-      save("kakeibo_workEntries", state.workEntries);
-      render();
     } else {
       const shift = state.workEntries.find(x => x.id === target.dataset.id);
       if (shift) {
         shift[field] = field === 'breakMin' ? Number(val) : val;
-        save("kakeibo_workEntries", state.workEntries);
-        render();
+        targetShiftId = shift.id;
       }
     }
+
+    // 交通費の自動同期処理
+    if (targetShiftId && field === 'isCompleted') {
+      const transportCost = Number(activeWp.transportCost) || 0;
+      if (transportCost > 0) {
+        if (val === true) {
+          const existing = state.expenses.find(e => e.linkedShiftId === targetShiftId);
+          if (!existing) {
+            state.expenses.push({
+              id: uid(),
+              date: date,
+              category: "Transport",
+              amount: transportCost,
+              note: `${activeWp.name} 交通費`,
+              linkedShiftId: targetShiftId
+            });
+          }
+        } else {
+          state.expenses = state.expenses.filter(e => e.linkedShiftId !== targetShiftId);
+        }
+        save("kakeibo_expenses", state.expenses);
+      }
+    }
+
+    save("kakeibo_workEntries", state.workEntries);
+    render();
   };
 
   document.querySelectorAll(".shift-done").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'isCompleted', true));
@@ -683,7 +712,6 @@ function attachHandlers() {
   document.querySelectorAll(".edit-out").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'clockOut', false));
   document.querySelectorAll(".edit-brk").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'breakMin', false));
 
-  // 1日ずつ追加するフォーム
   const adForm = document.getElementById("addAdhocForm");
   if (adForm) {
     adForm.onsubmit = (e) => {
@@ -702,7 +730,6 @@ function attachHandlers() {
       });
       save("kakeibo_workEntries", state.workEntries);
 
-      // 自動で対象の月へ遷移する処理
       const [y, m, d] = adDate.split("-").map(Number);
       let targetMonthStr = state.month;
       const cycle = activeWp.payCycle;
@@ -744,8 +771,11 @@ function attachHandlers() {
   document.querySelectorAll("[data-del-work]").forEach(btn => {
     btn.onclick = () => {
       if (!confirm("Delete this saved shift?")) return;
-      state.workEntries = state.workEntries.filter(x => x.id !== btn.dataset.delWork);
+      const targetId = btn.dataset.delWork;
+      state.workEntries = state.workEntries.filter(x => x.id !== targetId);
+      state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId); // シフト削除時に交通費も自動削除
       save("kakeibo_workEntries", state.workEntries);
+      save("kakeibo_expenses", state.expenses);
       render();
     };
   });
@@ -753,7 +783,7 @@ function attachHandlers() {
   const addWpBtn = document.getElementById("addWpBtn");
   if (addWpBtn) {
     addWpBtn.onclick = () => {
-      state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [], payCycle: "16" });
+      state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [], payCycle: "16", transportCost: 0 });
       render();
     };
   }
@@ -778,7 +808,8 @@ function attachHandlers() {
         wp.defaultIn = card.querySelector(".wp-in").value;
         wp.defaultOut = card.querySelector(".wp-out").value;
         wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
-        wp.payCycle = card.querySelector(".wp-cycle").value || "16"; // Save Pay Cycle
+        wp.payCycle = card.querySelector(".wp-cycle").value || "16"; 
+        wp.transportCost = Number(card.querySelector(".wp-trans").value) || 0; // 交通費の保存を修正
         
         wp.activeDays = [];
         card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
