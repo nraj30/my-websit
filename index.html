@@ -175,7 +175,7 @@ let state = {
   settings: rawSettings,
   activePlaceId: localStorage.getItem("kakeibo_place") || null,
   showHiddenShifts: false,
-  activeSettingTab: localStorage.getItem("kakeibo_setting_tab") || "shift" 
+  activeSettingTab: localStorage.getItem("kakeibo_setting_tab") || "shift" // 設定タブの分割管理用
 };
 
 if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w => w.id === state.activePlaceId)) {
@@ -244,7 +244,7 @@ function computeEntry(entry, customRate = null) {
   }
 
   const totalHours = (regMin + nightMin) / 60;
-  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25); 
+  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25);
   
   return { totalHours, nightHours: nightMin / 60, pay };
 }
