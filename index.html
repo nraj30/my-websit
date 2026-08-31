@@ -88,7 +88,7 @@
   .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
   .footer-note { text-align:center; font-size: 11px; color: var(--ink-soft); margin-top: 30px; letter-spacing: 0.04em; }
 
-  /* New Shift Styles */
+  /* Shift Styles */
   .shift-card { background: var(--paper-dark); padding: 14px; border-radius: 4px; border: 1px solid var(--rule); margin-bottom: 14px; }
   .day-chk { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:11px; cursor:pointer; }
   .shift-row { flex-wrap: wrap; border-radius: 4px; padding: 10px; margin-bottom: 8px; transition: all 0.2s ease; }
@@ -118,7 +118,6 @@
 
 <script>
 // ---------- constants ----------
-const CATEGORIES = ["Food","Housing","Transport","Utilities","Entertainment","Health","Shopping","Other"];
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 // ---------- Data Migration & Initial Setup ----------
@@ -130,22 +129,34 @@ function save(key, value) {
 }
 function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 
-// Data migration: add payCycle & transportCost if missing
+// Data migration
 let rawSettings = load("kakeibo_settings", {});
+let needsSave = false;
+
 if (!rawSettings.workplaces || typeof rawSettings.workplaces === 'string') {
   const oldNames = typeof rawSettings.workplaces === 'string' ? rawSettings.workplaces.split(",") : ["LAWSON"];
   rawSettings.workplaces = oldNames.map(n => ({
     id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16", transportCost: 0
   }));
-  save("kakeibo_settings", rawSettings);
+  needsSave = true;
 } else {
-  let needsSave = false;
   rawSettings.workplaces.forEach(w => {
     if (!w.payCycle) { w.payCycle = "16"; needsSave = true; }
     if (w.transportCost === undefined) { w.transportCost = 0; needsSave = true; }
   });
-  if (needsSave) save("kakeibo_settings", rawSettings);
 }
+
+// Ensure custom categories & recurring templates exist
+if (!rawSettings.categories || !Array.isArray(rawSettings.categories) || rawSettings.categories.length === 0) {
+  rawSettings.categories = ["Food","Housing","Transport","Utilities","Entertainment","Health","Shopping","Other"];
+  needsSave = true;
+}
+if (!rawSettings.recurring) {
+  rawSettings.recurring = [];
+  needsSave = true;
+}
+
+if (needsSave) save("kakeibo_settings", rawSettings);
 
 const TABS = [
   { id: "dashboard", label: "Overview", jp: "総覧" },
@@ -163,7 +174,8 @@ let state = {
   workEntries: load("kakeibo_workEntries", []),
   settings: rawSettings,
   activePlaceId: localStorage.getItem("kakeibo_place") || null,
-  showHiddenShifts: false
+  showHiddenShifts: false,
+  activeSettingTab: localStorage.getItem("kakeibo_setting_tab") || "shift" 
 };
 
 if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w => w.id === state.activePlaceId)) {
@@ -188,7 +200,6 @@ function shiftMonth(ym, delta) {
 }
 function esc(s) { const d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
 
-// Updated Date Calculation based on Pay Cycle
 function getPeriodDates(ym, cycle) {
   if (!ym) ym = todayISO().slice(0,7);
   const [y, m] = ym.split("-").map(Number);
@@ -204,8 +215,8 @@ function toISO(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// --- Work Calculation (交通費を加算するように修正) ---
-function computeEntry(entry, customRate = null, transportCost = 0) {
+// --- Work Calculation ---
+function computeEntry(entry, customRate = null) {
   if (!entry || !entry.clockIn || !entry.clockOut) return { totalHours: 0, nightHours: 0, pay: 0 };
   const [inH,inM] = entry.clockIn.split(":").map(Number);
   const [outH,outM] = entry.clockOut.split(":").map(Number);
@@ -233,8 +244,7 @@ function computeEntry(entry, customRate = null, transportCost = 0) {
   }
 
   const totalHours = (regMin + nightMin) / 60;
-  // 給料に交通費を足す
-  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25) + transportCost;
+  const pay = ((regMin / 60) * rate) + ((nightMin / 60) * rate * 1.25); 
   
   return { totalHours, nightHours: nightMin / 60, pay };
 }
@@ -291,7 +301,9 @@ function renderDashboard() {
     const endStr = toISO(endD);
     
     const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && x.date >= startStr && x.date <= endStr);
-    totalPay += wpShifts.reduce((s,x) => s + (computeEntry(x, wp.rate, wp.transportCost).pay), 0);
+    wpShifts.forEach(x => {
+      totalPay += computeEntry(x, wp.rate).pay + (Number(wp.transportCost) || 0);
+    });
   });
   
   const totalExpenses = monthExpenses.reduce((s,x)=>s+Number(x.amount),0);
@@ -334,7 +346,7 @@ function renderDashboard() {
 
 function renderExpenses() {
   const monthExpenses = getMonthExpenses();
-  const catOptions = CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join("");
+  const catOptions = state.settings.categories.map(c=>`<option value="${c}">${c}</option>`).join("");
   const rows = monthExpenses.map(x => `
     <div class="ledger-row">
       <span class="ledger-date num">${esc(x.date.slice(5))}</span>
@@ -343,9 +355,24 @@ function renderExpenses() {
       <button type="button" class="del-btn" data-del-expense="${x.id}">✕</button>
     </div>`).join("");
 
+  const recButtons = (state.settings.recurring || []).map(r => `
+    <button type="button" class="add-btn" style="background:var(--paper-dark); color:var(--ink); border:1px solid var(--rule);" data-add-rec="${r.id}">
+      + ${esc(r.name)} (${yen(r.amount)})
+    </button>
+  `).join("");
+  
+  const quickAddHtml = (state.settings.recurring && state.settings.recurring.length > 0) ? `
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:20px;">
+      ${recButtons}
+    </div>
+  ` : `<div style="font-size:11px; color:var(--ink-soft); margin-bottom:20px;">設定(Settings)タブから「毎月の固定費テンプレート」を追加できます。</div>`;
+
   return `
     ${monthNavHTML()}
     <div class="card ledger-panel">
+      <p class="card-title">Quick Add (固定費)</p>
+      ${quickAddHtml}
+
       <p class="card-title">Add Expense</p>
       <form class="form-row" id="expForm" style="margin-bottom:20px">
         <div class="field"><label>Date</label><input type="date" id="expDate" value="${todayISO()}" required></div>
@@ -364,7 +391,7 @@ function renderBudget() {
   const spentByCategory = {};
   monthExpenses.forEach(x => { spentByCategory[x.category] = (spentByCategory[x.category]||0) + Number(x.amount); });
 
-  const rows = CATEGORIES.map(cat => {
+  const rows = state.settings.categories.map(cat => {
     const b = Number(state.budgets[cat]) || 0;
     const spent = spentByCategory[cat] || 0;
     const remainText = b > 0 ? (b - spent >= 0 ? yen(b-spent)+" left" : yen(spent-b)+" over") : "no budget set";
@@ -400,7 +427,7 @@ function renderHours() {
   const todayStr = todayISO();
 
   let displayShifts = [];
-  let totalPay = 0, totalHours = 0, totalNight = 0;
+  let totalPay = 0, totalHours = 0, totalNight = 0, totalTransport = 0;
 
   for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
     const dateStr = toISO(d);
@@ -410,9 +437,12 @@ function renderHours() {
     
     if (savedShiftsForDay.length > 0) {
       savedShiftsForDay.forEach(shift => {
-        const calc = computeEntry(shift, activeWp.rate, activeWp.transportCost);
+        const calc = computeEntry(shift, activeWp.rate);
         if (shift.isCompleted) {
-          totalPay += calc.pay; totalHours += calc.totalHours; totalNight += calc.nightHours;
+          totalPay += calc.pay; 
+          totalHours += calc.totalHours; 
+          totalNight += calc.nightHours;
+          totalTransport += Number(activeWp.transportCost) || 0;
         }
         displayShifts.push({ ...shift, calc, dayName: DAYS[dayOfWeek] });
       });
@@ -423,7 +453,7 @@ function renderHours() {
           clockIn: activeWp.defaultIn, clockOut: activeWp.defaultOut, breakMin: activeWp.defaultBreak,
           isCompleted: false, isVirtual: true, isAdhoc: false
         };
-        virtualShift.calc = computeEntry(virtualShift, activeWp.rate, activeWp.transportCost);
+        virtualShift.calc = computeEntry(virtualShift, activeWp.rate);
         displayShifts.push({ ...virtualShift, dayName: DAYS[dayOfWeek] });
       }
     }
@@ -511,7 +541,13 @@ function renderHours() {
     <div class="stat-grid">
       <div class="stat-box"><div class="label">Total hours</div><div class="value num">${totalHours.toFixed(1)}h</div></div>
       <div class="stat-box"><div class="label">LATE NIGHT</div><div class="value num" style="color:var(--amber)">${totalNight.toFixed(1)}h</div></div>
-      <div class="stat-box"><div class="label">Total pay</div><div class="value pos num">${yen(totalPay)}</div></div>
+      <div class="stat-box">
+        <div class="label">Total pay</div>
+        <div class="value pos num" style="line-height:1.2;">
+          ${yen(totalPay + totalTransport)}
+          <div style="font-size:11px; color:var(--ink-soft); font-weight:normal;">(+ ${yen(totalTransport)} 交通費)</div>
+        </div>
+      </div>
     </div>
     
     <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
@@ -562,22 +598,72 @@ function renderSettings() {
       </div>`;
   }).join("");
 
-  return `
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <p class="card-title" style="margin:0;">SHIFT SETTINGS</p>
-        <button class="add-btn" id="addWpBtn" style="font-size:11px; padding:4px 8px; height:auto;">+ New Workplace</button>
-      </div>
-      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">
-        Define your basic shift pattern here. The Working Hours tab will automatically generate calendar entries for these days.
-      </div>
-      <form id="wpSettingsForm">
-        ${wpRows || '<div class="empty-state">No workplaces. Add one above.</div>'}
-        <div style="display:flex; justify-content:flex-end;">
-          <button type="submit" class="add-btn" style="background:var(--green); border:1px solid #2e4029;">Save Settings</button>
-        </div>
-      </form>
+  const recRows = state.settings.recurring.map((r, idx) => `
+    <div class="rec-row" data-id="${r.id}" style="display:flex; gap:10px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
+      <input type="text" class="rec-name" value="${esc(r.name)}" placeholder="Gym, Phone..." style="flex:1; min-width:100px;">
+      <select class="rec-cat">${state.settings.categories.map(c=>`<option value="${c}" ${c===r.category?'selected':''}>${c}</option>`).join('')}</select>
+      <input type="number" class="rec-amount num" value="${r.amount}" placeholder="¥" style="width:100px;">
+      <button type="button" class="del-btn del-rec-btn" data-id="${r.id}">✕</button>
     </div>
+  `).join("");
+
+  const subTabsHtml = `
+    <div style="display:flex; gap:2px; margin-bottom:16px; border-bottom: 2px solid var(--ink);">
+      <button type="button" class="tab-btn ${state.activeSettingTab === 'shift' ? 'active' : ''}" data-settab="shift" style="flex:1; font-size:12px; padding:10px;">
+        シフト設定 (Shift)
+      </button>
+      <button type="button" class="tab-btn ${state.activeSettingTab === 'expense' ? 'active' : ''}" data-settab="expense" style="flex:1; font-size:12px; padding:10px;">
+        支出・固定費 (Expense)
+      </button>
+    </div>`;
+
+  return `
+    ${subTabsHtml}
+    
+    <form id="settingsForm">
+      
+      <!-- SHIFT SETTINGS TAB -->
+      <div style="display: ${state.activeSettingTab === 'shift' ? 'block' : 'none'};">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <p class="card-title" style="margin:0;">SHIFT SETTINGS (シフト設定)</p>
+            <button type="button" class="add-btn" id="addWpBtn" style="font-size:11px; padding:4px 8px; height:auto;">+ New Workplace</button>
+          </div>
+          <div style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">
+            Define your basic shift pattern here. The Working Hours tab will automatically generate calendar entries for these days.
+          </div>
+          ${wpRows || '<div class="empty-state">No workplaces. Add one above.</div>'}
+        </div>
+      </div>
+
+      <!-- EXPENSE SETTINGS TAB -->
+      <div style="display: ${state.activeSettingTab === 'expense' ? 'block' : 'none'};">
+        <div class="card">
+          <p class="card-title" style="margin-bottom:16px;">EXPENSE SETTINGS (支出設定)</p>
+          
+          <div class="field" style="margin-bottom:20px;">
+            <label>CATEGORIES (カテゴリを自由に編集)</label>
+            <input type="text" class="setting-cats" value="${state.settings.categories.join(", ")}">
+            <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">カンマ( , )区切りで入力。変更すると予算(Budget)タブにも反映されます。</div>
+          </div>
+          
+          <div style="border-top: 1px dashed var(--rule); margin: 20px 0;"></div>
+          
+          <label style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); font-weight: bold; display:block; margin-bottom:8px;">MONTHLY TEMPLATES (毎月の固定費)</label>
+          <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px;">登録しておくと、Expensesタブにワンタップで追加できる専用ボタンが表示されます。</div>
+          
+          <div id="rec-list">
+            ${recRows}
+          </div>
+          <button type="button" class="add-btn" id="addRecBtn" style="font-size:11px; background:transparent; color:var(--ink); border:1px dashed var(--ink-soft); margin-top:8px;">+ Add Template</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; margin-bottom:18px;">
+        <button type="submit" class="add-btn" style="background:var(--green); border:1px solid #2e4029; font-size:14px; padding:10px 20px;">Save Settings</button>
+      </div>
+    </form>
+
     <div class="card">
       <p class="card-title">Backup &amp; Restore</p>
       <div class="backup-row">
@@ -619,6 +705,17 @@ function attachHandlers() {
     state.expenses.push({ id: uid(), date: document.getElementById("expDate").value, category: document.getElementById("expCategory").value, amount: Number(document.getElementById("expAmount").value), note: document.getElementById("expNote").value.trim() });
     save("kakeibo_expenses", state.expenses); render();
   };
+
+  document.querySelectorAll("[data-add-rec]").forEach(btn => {
+    btn.onclick = () => {
+      const template = state.settings.recurring.find(r => r.id === btn.dataset.addRec);
+      if(template) {
+        state.expenses.push({ id: uid(), date: todayISO(), category: template.category, amount: template.amount, note: template.name });
+        save("kakeibo_expenses", state.expenses);
+        render();
+      }
+    };
+  });
   
   document.querySelectorAll("[data-del-expense]").forEach(btn => btn.onclick = () => {
       if(confirm("Delete this expense?")) { state.expenses = state.expenses.filter(x => x.id !== btn.dataset.delExpense); save("kakeibo_expenses", state.expenses); render(); }
@@ -628,6 +725,7 @@ function attachHandlers() {
       state.budgets[inp.dataset.budgetCat] = inp.value === "" ? 0 : Number(inp.value); save("kakeibo_budgets", state.budgets);
   });
 
+  // Working Hours サブタブ切り替え
   document.querySelectorAll("[data-subtab]").forEach(btn => {
     btn.onclick = () => { 
       state.activePlaceId = btn.dataset.subtab; 
@@ -637,12 +735,7 @@ function attachHandlers() {
   });
 
   const toggleHiddenBtn = document.getElementById("toggleHiddenBtn");
-  if (toggleHiddenBtn) {
-    toggleHiddenBtn.onclick = () => {
-      state.showHiddenShifts = !state.showHiddenShifts;
-      render();
-    };
-  }
+  if (toggleHiddenBtn) toggleHiddenBtn.onclick = () => { state.showHiddenShifts = !state.showHiddenShifts; render(); };
 
   const handleShiftInteraction = (target, field, isCheckbox) => {
     const isVirtual = target.dataset.virtual === "true";
@@ -680,21 +773,13 @@ function attachHandlers() {
       }
     }
 
-    // 交通費の自動同期処理
     if (targetShiftId && field === 'isCompleted') {
       const transportCost = Number(activeWp.transportCost) || 0;
       if (transportCost > 0) {
         if (val === true) {
           const existing = state.expenses.find(e => e.linkedShiftId === targetShiftId);
           if (!existing) {
-            state.expenses.push({
-              id: uid(),
-              date: date,
-              category: "Transport",
-              amount: transportCost,
-              note: `${activeWp.name} 交通費`,
-              linkedShiftId: targetShiftId
-            });
+            state.expenses.push({ id: uid(), date: date, category: "Transport", amount: transportCost, note: `${activeWp.name} 交通費`, linkedShiftId: targetShiftId });
           }
         } else {
           state.expenses = state.expenses.filter(e => e.linkedShiftId !== targetShiftId);
@@ -720,13 +805,11 @@ function attachHandlers() {
       const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
       
       state.workEntries.push({
-        id: uid(), placeId: state.activePlaceId,
-        date: adDate,
+        id: uid(), placeId: state.activePlaceId, date: adDate,
         clockIn: document.getElementById("adIn").value,
         clockOut: document.getElementById("adOut").value,
         breakMin: Number(document.getElementById("adBreak").value) || 0,
-        isCompleted: false,
-        isAdhoc: true
+        isCompleted: false, isAdhoc: true
       });
       save("kakeibo_workEntries", state.workEntries);
 
@@ -741,27 +824,20 @@ function attachHandlers() {
           let nextM = m + 1; let nextY = y;
           if (nextM > 12) { nextM = 1; nextY++; }
           targetMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
-        } else {
-          targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
-        }
+        } else targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
       } else {
         if (d >= 16) {
           let nextM = m + 1; let nextY = y;
           if (nextM > 12) { nextM = 1; nextY++; }
           targetMonthStr = `${nextY}-${String(nextM).padStart(2, '0')}`;
-        } else {
-          targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
-        }
+        } else targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
       }
 
       if (state.month !== targetMonthStr) {
         state.month = targetMonthStr;
         localStorage.setItem('kakeibo_month', state.month);
       }
-
-      if (adDate < todayISO()) {
-        state.showHiddenShifts = true;
-      }
+      if (adDate < todayISO()) state.showHiddenShifts = true;
 
       alert("単発シフトを追加しました！ ✅");
       render();
@@ -773,9 +849,54 @@ function attachHandlers() {
       if (!confirm("Delete this saved shift?")) return;
       const targetId = btn.dataset.delWork;
       state.workEntries = state.workEntries.filter(x => x.id !== targetId);
-      state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId); // シフト削除時に交通費も自動削除
+      state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId);
       save("kakeibo_workEntries", state.workEntries);
       save("kakeibo_expenses", state.expenses);
+      render();
+    };
+  });
+
+  // Settings Forms Sync (入力途中のデータを記憶)
+  const syncSettingsForm = () => {
+    document.querySelectorAll(".shift-card").forEach((card, idx) => {
+      const wp = state.settings.workplaces[idx];
+      if(!wp) return;
+      wp.name = card.querySelector(".wp-name").value || "Unnamed";
+      wp.rate = Number(card.querySelector(".wp-rate").value) || 0;
+      wp.defaultIn = card.querySelector(".wp-in").value;
+      wp.defaultOut = card.querySelector(".wp-out").value;
+      wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
+      wp.payCycle = card.querySelector(".wp-cycle").value || "16"; 
+      wp.transportCost = Number(card.querySelector(".wp-trans").value) || 0;
+      wp.activeDays = [];
+      card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
+    });
+
+    const catInput = document.querySelector(".setting-cats");
+    if (catInput) {
+      state.settings.categories = catInput.value.split(",").map(s=>s.trim()).filter(Boolean);
+    }
+    
+    const recRows = document.querySelectorAll(".rec-row");
+    if (recRows.length > 0 || catInput) {
+      state.settings.recurring = Array.from(recRows).map(row => ({
+         id: row.dataset.id,
+         name: row.querySelector(".rec-name").value,
+         category: row.querySelector(".rec-cat").value,
+         amount: Number(row.querySelector(".rec-amount").value) || 0
+      }));
+    }
+  };
+
+  // Settings サブタブ切り替え
+  document.querySelectorAll("[data-settab]").forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      if (document.getElementById("settingsForm")) {
+        syncSettingsForm(); // タブを切り替える前に、入力中の内容を裏で保存
+      }
+      state.activeSettingTab = btn.dataset.settab;
+      localStorage.setItem("kakeibo_setting_tab", state.activeSettingTab);
       render();
     };
   });
@@ -783,7 +904,18 @@ function attachHandlers() {
   const addWpBtn = document.getElementById("addWpBtn");
   if (addWpBtn) {
     addWpBtn.onclick = () => {
+      syncSettingsForm();
       state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [], payCycle: "16", transportCost: 0 });
+      render();
+    };
+  }
+
+  const addRecBtn = document.getElementById("addRecBtn");
+  if (addRecBtn) {
+    addRecBtn.onclick = () => {
+      syncSettingsForm();
+      const firstCat = state.settings.categories.length > 0 ? state.settings.categories[0] : "Other";
+      state.settings.recurring.push({ id: uid(), name: "", category: firstCat, amount: 0 });
       render();
     };
   }
@@ -791,31 +923,28 @@ function attachHandlers() {
   document.querySelectorAll(".del-wp-btn").forEach(btn => {
     btn.onclick = () => {
       if(!confirm("Are you sure?")) return;
+      syncSettingsForm();
       state.settings.workplaces = state.settings.workplaces.filter(w => w.id !== btn.dataset.id);
-      save("kakeibo_settings", state.settings);
       render();
     };
   });
 
-  const wpSettingsForm = document.getElementById("wpSettingsForm");
-  if (wpSettingsForm) {
-    wpSettingsForm.onsubmit = (e) => {
+  document.querySelectorAll(".del-rec-btn").forEach(btn => {
+    btn.onclick = () => {
+      syncSettingsForm();
+      state.settings.recurring = state.settings.recurring.filter(r => r.id !== btn.dataset.id);
+      render();
+    };
+  });
+
+  const settingsForm = document.getElementById("settingsForm");
+  if (settingsForm) {
+    settingsForm.onsubmit = (e) => {
       e.preventDefault();
-      document.querySelectorAll(".shift-card").forEach((card, idx) => {
-        const wp = state.settings.workplaces[idx];
-        wp.name = card.querySelector(".wp-name").value || "Unnamed";
-        wp.rate = Number(card.querySelector(".wp-rate").value) || 0;
-        wp.defaultIn = card.querySelector(".wp-in").value;
-        wp.defaultOut = card.querySelector(".wp-out").value;
-        wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
-        wp.payCycle = card.querySelector(".wp-cycle").value || "16"; 
-        wp.transportCost = Number(card.querySelector(".wp-trans").value) || 0; // 交通費の保存を修正
-        
-        wp.activeDays = [];
-        card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
-      });
+      syncSettingsForm();
       save("kakeibo_settings", state.settings);
       alert("Settings Saved!");
+      render();
     };
   }
 
