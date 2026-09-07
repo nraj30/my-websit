@@ -139,14 +139,8 @@ if (!rawSettings.workplaces || typeof rawSettings.workplaces === 'string') {
     id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16", transportCost: 0
   }));
   needsSave = true;
-} else {
-  rawSettings.workplaces.forEach(w => {
-    if (!w.payCycle) { w.payCycle = "16"; needsSave = true; }
-    if (w.transportCost === undefined) { w.transportCost = 0; needsSave = true; }
-  });
 }
 
-// Ensure custom categories & recurring templates exist
 if (!rawSettings.categories || !Array.isArray(rawSettings.categories) || rawSettings.categories.length === 0) {
   rawSettings.categories = ["Food","Housing","Transport","Utilities","Entertainment","Health","Shopping","Other"];
   needsSave = true;
@@ -175,7 +169,8 @@ let state = {
   settings: rawSettings,
   activePlaceId: localStorage.getItem("kakeibo_place") || null,
   showHiddenShifts: false,
-  activeSettingTab: localStorage.getItem("kakeibo_setting_tab") || "shift" // 設定タブの分割管理用
+  activeSettingTab: localStorage.getItem("kakeibo_setting_tab") || "shift",
+  //clickedRecs: new Set() // 1回クリックしたQuick Addを非表示にするための記録
 };
 
 if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w => w.id === state.activePlaceId)) {
@@ -260,7 +255,19 @@ function pbarHTML(value, max) {
   return `<div class="pbar-track"><div class="pbar-fill" style="width:${pct}%;background:${color}"></div></div>`;
 }
 
-function getMonthExpenses() { return state.expenses.filter(x => x && monthOf(x.date) === state.month).sort((a,b)=> a.date > b.date ? 1 : -1); }
+// 追加した時間（createdAt）順で並び替えるように修正
+function getMonthExpenses() { 
+  return state.expenses
+    .filter(x => x && monthOf(x.date) === state.month)
+    .sort((a, b) => {
+      // 日付が違う場合は新しい日付を上に
+      if (a.date !== b.date) return a.date > b.date ? -1 : 1;
+      // 日付が同じ場合は、追加した時間が新しいものを上に（古いものが下）
+      const timeA = a.createdAt || 0;
+      const timeB = b.createdAt || 0;
+      return timeB - timeA;
+    });
+}
 
 // ---------- render ----------
 function render() {
@@ -355,15 +362,21 @@ function renderExpenses() {
       <button type="button" class="del-btn" data-del-expense="${x.id}">✕</button>
     </div>`).join("");
 
-  const recButtons = (state.settings.recurring || []).map(r => `
-    <button type="button" class="add-btn" style="background:var(--paper-dark); color:var(--ink); border:1px solid var(--rule);" data-add-rec="${r.id}">
-      + ${esc(r.name)} (${yen(r.amount)})
-    </button>
+  // 金額を編集可能にし、クリック済みのものを隠す
+  const recButtons = (state.settings.recurring || [])
+    .filter(r => !monthExpenses.some(e => e.linkedRecId === r.id))
+    .map(r => `
+    <div style="display:flex; align-items:center; gap:4px; background:var(--paper-dark); padding:6px 10px; border:1px solid var(--rule); border-radius:4px;">
+      <button type="button" style="background:transparent; border:none; cursor:pointer; font-weight:bold; color:var(--ink); padding:0;" data-add-rec="${r.id}">
+        + ${esc(r.name)}
+      </button>
+      <input type="number" id="qa-amt-${r.id}" class="num" value="${r.amount}" style="width:70px; padding:4px; font-size:13px; border:1px solid var(--rule); border-radius:3px; margin-left:4px;">
+    </div>
   `).join("");
   
   const quickAddHtml = (state.settings.recurring && state.settings.recurring.length > 0) ? `
-    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:20px;">
-      ${recButtons}
+    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
+      ${recButtons || '<div style="font-size:11px; color:var(--ink-soft);">すべて追加済みです。</div>'}
     </div>
   ` : `<div style="font-size:11px; color:var(--ink-soft); margin-bottom:20px;">設定(Settings)タブから「毎月の固定費テンプレート」を追加できます。</div>`;
 
@@ -702,16 +715,37 @@ function attachHandlers() {
   const expForm = document.getElementById("expForm");
   if (expForm) expForm.onsubmit = (e) => {
     e.preventDefault();
-    state.expenses.push({ id: uid(), date: document.getElementById("expDate").value, category: document.getElementById("expCategory").value, amount: Number(document.getElementById("expAmount").value), note: document.getElementById("expNote").value.trim() });
+    state.expenses.push({ 
+      id: uid(), 
+      date: document.getElementById("expDate").value, 
+      category: document.getElementById("expCategory").value, 
+      amount: Number(document.getElementById("expAmount").value), 
+      note: document.getElementById("expNote").value.trim(),
+      createdAt: Date.now() // 手動追加時も時間を記録
+    });
     save("kakeibo_expenses", state.expenses); render();
   };
 
   document.querySelectorAll("[data-add-rec]").forEach(btn => {
     btn.onclick = () => {
-      const template = state.settings.recurring.find(r => r.id === btn.dataset.addRec);
+      const recId = btn.dataset.addRec;
+      const template = state.settings.recurring.find(r => r.id === recId);
+      const amtInput = document.getElementById(`qa-amt-${recId}`); // 金額入力欄の値を取得
+      
       if(template) {
-        state.expenses.push({ id: uid(), date: todayISO(), category: template.category, amount: template.amount, note: template.name });
+        const finalAmount = amtInput ? Number(amtInput.value) : template.amount;
+        const tarfetDate  = (todayISO().slice(0,7) === state.month) ? todayISO() : state.month + "-01"; // 今月の1日をデフォルト日付に設定                                             
+        state.expenses.push({ 
+          id: uid(), 
+          date: tarfetDate, 
+          category: template.category, 
+          amount: finalAmount, 
+          note: template.name,
+          createdAt: Date.now(), // Quick Add追加時も時間を記録
+          linkedRecId: recId
+        });
         save("kakeibo_expenses", state.expenses);
+       // state.clickedRecs.add(recId); // 押した記録を残して非表示にする
         render();
       }
     };
@@ -725,7 +759,6 @@ function attachHandlers() {
       state.budgets[inp.dataset.budgetCat] = inp.value === "" ? 0 : Number(inp.value); save("kakeibo_budgets", state.budgets);
   });
 
-  // Working Hours サブタブ切り替え
   document.querySelectorAll("[data-subtab]").forEach(btn => {
     btn.onclick = () => { 
       state.activePlaceId = btn.dataset.subtab; 
@@ -779,7 +812,15 @@ function attachHandlers() {
         if (val === true) {
           const existing = state.expenses.find(e => e.linkedShiftId === targetShiftId);
           if (!existing) {
-            state.expenses.push({ id: uid(), date: date, category: "Transport", amount: transportCost, note: `${activeWp.name} 交通費`, linkedShiftId: targetShiftId });
+            state.expenses.push({ 
+              id: uid(), 
+              date: date, 
+              category: "Transport", 
+              amount: transportCost, 
+              note: `${activeWp.name} 交通費`, 
+              linkedShiftId: targetShiftId,
+              createdAt: Date.now()
+            });
           }
         } else {
           state.expenses = state.expenses.filter(e => e.linkedShiftId !== targetShiftId);
@@ -856,7 +897,6 @@ function attachHandlers() {
     };
   });
 
-  // Settings Forms Sync (入力途中のデータを記憶)
   const syncSettingsForm = () => {
     document.querySelectorAll(".shift-card").forEach((card, idx) => {
       const wp = state.settings.workplaces[idx];
@@ -888,12 +928,11 @@ function attachHandlers() {
     }
   };
 
-  // Settings サブタブ切り替え
   document.querySelectorAll("[data-settab]").forEach(btn => {
     btn.onclick = (e) => {
       e.preventDefault();
       if (document.getElementById("settingsForm")) {
-        syncSettingsForm(); // タブを切り替える前に、入力中の内容を裏で保存
+        syncSettingsForm();
       }
       state.activeSettingTab = btn.dataset.settab;
       localStorage.setItem("kakeibo_setting_tab", state.activeSettingTab);
