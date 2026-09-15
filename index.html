@@ -161,7 +161,7 @@ if (needsSave) save("kakeibo_settings", rawSettings);
 
 const TABS = [
   { id: "dashboard", label: "Overview", jp: "総覧" },
-  { id: "expenses", label: "Ledger", jp: "収支" }, // Changed name slightly to fit income/expense
+  { id: "expenses", label: "Ledger", jp: "収支" }, 
   { id: "budget", label: "Budget", jp: "予算" },
   { id: "hours", label: "Work Hours", jp: "勤務" },
   { id: "settings", label: "Settings", jp: "設定" },
@@ -170,7 +170,7 @@ const TABS = [
 let state = {
   tab: localStorage.getItem("kakeibo_tab") || "hours",
   month: localStorage.getItem("kakeibo_month") || todayISO().slice(0,7),
-  expenses: load("kakeibo_expenses", []), // Now holds both incomes & expenses based on `isIncome` flag
+  expenses: load("kakeibo_expenses", []), 
   budgets: load("kakeibo_budgets", {}),
   workEntries: load("kakeibo_workEntries", []),
   settings: rawSettings,
@@ -357,7 +357,7 @@ function renderDashboard() {
     const startStr = toISO(startD);
     const endStr = toISO(endD);
     
-    const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && x.date >= startStr && x.date <= endStr);
+    const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && !x.isDeleted && !x.isOff && x.date >= startStr && x.date <= endStr);
     wpShifts.forEach(x => {
       totalPay += computeEntry(x, wp.rate).pay;
       totalTransport += (Number(wp.transportCost) || 0);
@@ -517,8 +517,11 @@ function renderHours() {
     
     if (savedShiftsForDay.length > 0) {
       savedShiftsForDay.forEach(shift => {
-        const calc = computeEntry(shift, activeWp.rate);
-        if (shift.isCompleted) {
+        if (shift.isDeleted) return; // 完全に消したシフトは無視
+
+        const calc = shift.isOff ? { totalHours: 0, nightHours: 0, pay: 0 } : computeEntry(shift, activeWp.rate);
+        
+        if (shift.isCompleted && !shift.isOff) {
           totalPay += calc.pay; 
           totalHours += calc.totalHours; 
           totalNight += calc.nightHours;
@@ -543,7 +546,7 @@ function renderHours() {
   let hiddenCount = 0;
 
   displayShifts.forEach(x => {
-    if (x.isCompleted && x.date < todayStr) {
+    if (x.isCompleted && x.date < todayStr && !x.isOff) {
       if (state.showHiddenShifts) {
         visibleShifts.push(x);
       } else {
@@ -565,6 +568,23 @@ function renderHours() {
   const ledgerRows = visibleShifts.length === 0
     ? `<div class="empty-state">No scheduled shifts to display.</div>`
     : visibleShifts.map(x => {
+        if (x.isOff) {
+          return `
+          <div class="ledger-row shift-row shift-virtual" style="border: 1px dashed var(--red); background: #fdf5f4;">
+            <div style="display:flex; align-items:center; gap:8px; width: 100%;">
+              <div style="width:20px;"></div>
+              <div style="display:flex; flex-direction:column; align-items:center; width:44px; flex-shrink:0;">
+                <span class="num" style="font-size:14px; font-weight:bold; color:var(--red);">${x.date.slice(8,10)}</span>
+                <span style="font-size:10px; color:var(--red-soft);">${x.dayName}</span>
+              </div>
+              <div style="display:flex; gap:4px; flex:1; align-items:center; color: var(--red); font-weight: bold; letter-spacing: 0.1em; padding-left: 4px;">
+                休み
+              </div>
+              <button type="button" class="del-btn" data-del-work="${x.id}" data-virtual="${x.isVirtual}" data-adhoc="${x.isAdhoc}" data-date="${x.date}">✕</button>
+            </div>
+          </div>`;
+        }
+
         let rowClass = "shift-virtual";
         if (x.isCompleted && !x.isAdhoc) rowClass = "shift-completed";
         if (x.isAdhoc) rowClass = "shift-adhoc";
@@ -584,7 +604,7 @@ function renderHours() {
               <input type="number" class="num edit-brk" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.breakMin || 0}" step="1" style="width:50px; padding:4px;" title="Break(min)">
             </div>
             <span class="ledger-amount num" style="opacity: ${x.isCompleted ? '1' : '0.4'}">${yen(x.calc.pay)}</span>
-            ${!x.isVirtual ? `<button type="button" class="del-btn" data-del-work="${x.id}">✕</button>` : `<div style="width:28px;"></div>`}
+            <button type="button" class="del-btn" data-del-work="${x.id}" data-virtual="${x.isVirtual}" data-adhoc="${x.isAdhoc}" data-date="${x.date}">✕</button>
           </div>
           <div style="width:100%; text-align:right; font-size:11px; color:var(--ink-soft); margin-top:4px;">
              ${x.isAdhoc ? '<strong style="color:var(--ink);">Extra Shift</strong> | ' : ''}${x.calc.totalHours.toFixed(1)}h @ ¥${activeWp.rate}/hr${x.calc.nightHours>0?` (${x.calc.nightHours.toFixed(1)}h late)`:""}
@@ -647,7 +667,7 @@ function renderHours() {
       <div class="stat-box">
         <div class="label">Total pay</div>
         <div class="value pos num" style="line-height:1.2;">
-          ${yen(totalPay)}
+          ${yen(totalPay + totalTransport)}
           <div style="font-size:11px; color:var(--ink-soft); font-weight:normal;">(+ ${yen(totalTransport)} 交通費)</div>
         </div>
       </div>
@@ -793,13 +813,13 @@ function attachHandlers() {
   const next = document.getElementById("nextMonth");
   if (prev) prev.onclick = () => { 
     state.month = shiftMonth(state.month, -1); 
-    state.miniCalMonth = state.month; // カレンダーも連動
+    state.miniCalMonth = state.month; 
     localStorage.setItem("kakeibo_month", state.month);
     render(); 
   };
   if (next) next.onclick = () => { 
     state.month = shiftMonth(state.month, 1); 
-    state.miniCalMonth = state.month; // カレンダーも連動
+    state.miniCalMonth = state.month; 
     localStorage.setItem("kakeibo_month", state.month);
     render(); 
   };
@@ -815,7 +835,7 @@ function attachHandlers() {
       amount: Number(document.getElementById("expAmount").value), 
       note: document.getElementById("expNote").value.trim(),
       createdAt: Date.now(),
-      isIncome: typeVal === "income" // 新しく追加した「収入」フラグ
+      isIncome: typeVal === "income" 
     });
     save("kakeibo_expenses", state.expenses); render();
   };
@@ -837,7 +857,7 @@ function attachHandlers() {
           note: template.name,
           createdAt: Date.now(), 
           linkedRecId: recId,
-          isIncome: false // 固定費は通常「支出」
+          isIncome: false 
         });
         save("kakeibo_expenses", state.expenses);
         render();
@@ -914,7 +934,7 @@ function attachHandlers() {
               note: `${activeWp.name} 交通費`, 
               linkedShiftId: targetShiftId,
               createdAt: Date.now(),
-              isIncome: false // 交通費は支出
+              isIncome: false 
             });
           }
         } else {
@@ -933,7 +953,6 @@ function attachHandlers() {
   document.querySelectorAll(".edit-out").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'clockOut', false));
   document.querySelectorAll(".edit-brk").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'breakMin', false));
 
-  // --- NEW: Mini Calendar & Batch Dates Handlers ---
   const miniPrev = document.getElementById("miniPrev");
   if(miniPrev) miniPrev.onclick = () => { state.miniCalMonth = shiftMonth(state.miniCalMonth, -1); render(); };
   const miniNext = document.getElementById("miniNext");
@@ -1011,10 +1030,64 @@ function attachHandlers() {
 
   document.querySelectorAll("[data-del-work]").forEach(btn => {
     btn.onclick = () => {
-      if (!confirm("Delete this saved shift?")) return;
       const targetId = btn.dataset.delWork;
-      state.workEntries = state.workEntries.filter(x => x.id !== targetId);
-      state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId);
+      const isVirtual = btn.dataset.virtual === "true";
+      const isAdhoc = btn.dataset.adhoc === "true";
+      const date = btn.dataset.date;
+
+      const wantDelete = confirm("このシフトを完全に消去しますか？\n(「キャンセル」を押すと休みにするか選べます)");
+      
+      let action = null;
+      if (wantDelete) {
+        action = "1";
+      } else {
+        const wantOff = confirm("この日を「休み」として赤字で残しますか？");
+        if (wantOff) action = "2";
+      }
+
+      if (!action) return;
+
+      if (action === "1") {
+        if (isVirtual) {
+          state.workEntries.push({
+            id: uid(), placeId: state.activePlaceId, date: date,
+            clockIn: "00:00", clockOut: "00:00", breakMin: 0,
+            isCompleted: false, isAdhoc: false, isDeleted: true
+          });
+        } else {
+          const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
+          const dayOfWeek = new Date(date).getDay();
+          
+          if (!isAdhoc && activeWp.activeDays.includes(dayOfWeek)) {
+            const shift = state.workEntries.find(x => x.id === targetId);
+            if (shift) {
+              shift.isDeleted = true;
+              shift.isOff = false;
+              shift.isCompleted = false;
+            }
+          } else {
+            state.workEntries = state.workEntries.filter(x => x.id !== targetId);
+          }
+          state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId);
+        }
+      } else if (action === "2") {
+        if (isVirtual) {
+          state.workEntries.push({
+            id: uid(), placeId: state.activePlaceId, date: date,
+            clockIn: "00:00", clockOut: "00:00", breakMin: 0,
+            isCompleted: false, isAdhoc: false, isOff: true
+          });
+        } else {
+          const shift = state.workEntries.find(x => x.id === targetId);
+          if (shift) {
+            shift.isOff = true;
+            shift.isDeleted = false;
+            shift.isCompleted = false;
+          }
+          state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId);
+        }
+      }
+      
       save("kakeibo_workEntries", state.workEntries);
       save("kakeibo_expenses", state.expenses);
       render();
