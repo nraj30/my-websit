@@ -46,7 +46,7 @@
   
   .stat-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
   .stat-box { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 16px; }
-  .stat-box .label { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .stat-box .label { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; line-height: 1.4; }
   .stat-box .value { font-size: 22px; font-weight: 600; }
   .stat-box .value.pos { color: var(--green); }
   .stat-box .value.neg { color: var(--red); }
@@ -88,20 +88,13 @@
   .settings-grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
   .footer-note { text-align:center; font-size: 11px; color: var(--ink-soft); margin-top: 30px; letter-spacing: 0.04em; }
 
-  /* Shift Styles */
+  /* New Shift Styles */
   .shift-card { background: var(--paper-dark); padding: 14px; border-radius: 4px; border: 1px solid var(--rule); margin-bottom: 14px; }
   .day-chk { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:11px; cursor:pointer; }
   .shift-row { flex-wrap: wrap; border-radius: 4px; padding: 10px; margin-bottom: 8px; transition: all 0.2s ease; }
   .shift-virtual { background: transparent; border: 1px dashed var(--rule); opacity: 0.7; }
   .shift-completed { background: var(--paper-dark); border: 1px solid var(--ink); opacity: 1; }
   .shift-adhoc { background: var(--blue-soft); border: 1px solid var(--blue-border); opacity: 1; }
-
-  /* Mini Calendar Styles */
-  .mini-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; font-size: 12px; margin-bottom: 8px; }
-  .mini-cal-head { font-weight: bold; color: var(--ink-soft); font-size: 10px; margin-bottom: 4px; }
-  .mini-cal-day { padding: 6px 0; border-radius: 4px; cursor: pointer; border: 1px solid transparent; background: var(--paper-dark); transition: 0.1s ease; }
-  .mini-cal-day:hover { border-color: var(--ink); }
-  .mini-cal-day.selected { background: var(--ink); color: var(--paper); font-weight: bold; }
 
   @media (max-width: 480px) {
     .stat-grid { grid-template-columns: 1fr; }
@@ -125,6 +118,7 @@
 
 <script>
 // ---------- constants ----------
+const CATEGORIES = ["Food","Housing","Transport","Utilities","Entertainment","Health","Shopping","Other"];
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
 // ---------- Data Migration & Initial Setup ----------
@@ -136,32 +130,25 @@ function save(key, value) {
 }
 function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now()+"-"+Math.random().toString(16).slice(2); }
 
-// Data migration
+// Data migration: add payCycle if missing
 let rawSettings = load("kakeibo_settings", {});
-let needsSave = false;
-
 if (!rawSettings.workplaces || typeof rawSettings.workplaces === 'string') {
   const oldNames = typeof rawSettings.workplaces === 'string' ? rawSettings.workplaces.split(",") : ["LAWSON"];
   rawSettings.workplaces = oldNames.map(n => ({
-    id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16", transportCost: 0
+    id: uid(), name: n.trim(), rate: 1200, defaultIn: "17:00", defaultOut: "22:00", defaultBreak: 0, activeDays: [], payCycle: "16"
   }));
-  needsSave = true;
+  save("kakeibo_settings", rawSettings);
+} else {
+  let needsSave = false;
+  rawSettings.workplaces.forEach(w => {
+    if (!w.payCycle) { w.payCycle = "16"; needsSave = true; }
+  });
+  if (needsSave) save("kakeibo_settings", rawSettings);
 }
-
-if (!rawSettings.categories || !Array.isArray(rawSettings.categories) || rawSettings.categories.length === 0) {
-  rawSettings.categories = ["Food","Housing","Transport","Utilities","Entertainment","Health","Shopping","Other"];
-  needsSave = true;
-}
-if (!rawSettings.recurring) {
-  rawSettings.recurring = [];
-  needsSave = true;
-}
-
-if (needsSave) save("kakeibo_settings", rawSettings);
 
 const TABS = [
   { id: "dashboard", label: "Overview", jp: "総覧" },
-  { id: "expenses", label: "Ledger", jp: "収支" }, 
+  { id: "expenses", label: "Expenses", jp: "支出" },
   { id: "budget", label: "Budget", jp: "予算" },
   { id: "hours", label: "Work Hours", jp: "勤務" },
   { id: "settings", label: "Settings", jp: "設定" },
@@ -170,15 +157,12 @@ const TABS = [
 let state = {
   tab: localStorage.getItem("kakeibo_tab") || "hours",
   month: localStorage.getItem("kakeibo_month") || todayISO().slice(0,7),
-  expenses: load("kakeibo_expenses", []), 
+  expenses: load("kakeibo_expenses", []),
   budgets: load("kakeibo_budgets", {}),
   workEntries: load("kakeibo_workEntries", []),
   settings: rawSettings,
   activePlaceId: localStorage.getItem("kakeibo_place") || null,
-  showHiddenShifts: false,
-  activeSettingTab: localStorage.getItem("kakeibo_setting_tab") || "shift",
-  batchDates: [],
-  miniCalMonth: localStorage.getItem("kakeibo_month") || todayISO().slice(0,7)
+  showHiddenShifts: false
 };
 
 if (state.settings.workplaces.length > 0 && !state.settings.workplaces.find(w => w.id === state.activePlaceId)) {
@@ -203,14 +187,18 @@ function shiftMonth(ym, delta) {
 }
 function esc(s) { const d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
 
+// Updated Date Calculation based on Pay Cycle
 function getPeriodDates(ym, cycle) {
   if (!ym) ym = todayISO().slice(0,7);
   const [y, m] = ym.split("-").map(Number);
   if (cycle === "1") {
+    // 1st to end of month
     return { startD: new Date(y, m - 1, 1), endD: new Date(y, m, 0) };
   } else if (cycle === "15") {
+    // 15th to 14th
     return { startD: new Date(y, m - 2, 15), endD: new Date(y, m - 1, 14) };
   } else {
+    // 16th to 15th (Default)
     return { startD: new Date(y, m - 2, 16), endD: new Date(y, m - 1, 15) };
   }
 }
@@ -263,57 +251,7 @@ function pbarHTML(value, max) {
   return `<div class="pbar-track"><div class="pbar-fill" style="width:${pct}%;background:${color}"></div></div>`;
 }
 
-function getMonthAllEntries() { 
-  return state.expenses
-    .filter(x => x && monthOf(x.date) === state.month)
-    .sort((a, b) => {
-      if (a.date !== b.date) return a.date > b.date ? -1 : 1;
-      const timeA = a.createdAt || 0;
-      const timeB = b.createdAt || 0;
-      return timeB - timeA;
-    });
-}
-
-// ---------- Mini Calendar logic ----------
-function renderMiniCalendar(ym) {
-  const [y, m] = ym.split("-").map(Number);
-  const firstDay = new Date(y, m-1, 1).getDay();
-  const daysInMonth = new Date(y, m, 0).getDate();
-  let html = '<div class="mini-cal-grid">';
-  const headDays = ["S","M","T","W","T","F","S"];
-  headDays.forEach(d => html += `<div class="mini-cal-head">${d}</div>`);
-  
-  for(let i=0; i<firstDay; i++) html += `<div></div>`;
-  for(let i=1; i<=daysInMonth; i++) {
-    const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-    const isSel = state.batchDates.some(b => b.date === dateStr);
-    html += `<div class="mini-cal-day ${isSel ? 'selected' : ''}" data-date="${dateStr}">${i}</div>`;
-  }
-  html += '</div>';
-  return html;
-}
-
-function renderBatchDatesRows() {
-  if (state.batchDates.length === 0) {
-    return `<tr><td colspan="6" style="text-align:center; padding:16px; color:var(--ink-soft); font-size:12px;">No dates selected. Click on the calendar to add shifts.</td></tr>`;
-  }
-  return state.batchDates.map((b, idx) => `
-    <tr class="b-row" data-idx="${idx}" style="border-bottom: 1px solid var(--rule);">
-      <td style="font-size:12px; font-weight:bold; padding: 6px 4px;">${b.date.slice(5)}</td>
-      <td style="padding: 6px 4px;"><input type="time" class="b-in num" value="${b.in}" step="60" style="width:75px; padding:4px;"></td>
-      <td style="padding: 6px 4px;"><input type="time" class="b-out num" value="${b.out}" step="60" style="width:75px; padding:4px;"></td>
-      <td style="padding: 6px 4px;"><input type="number" class="b-brk num" value="${b.brk}" step="1" style="width:50px; padding:4px;"></td>
-      <td style="padding: 6px 4px;">
-        <select class="b-rep" style="width:90px; padding:4px; font-size:11px;">
-          <option value="none" ${b.repeat==='none'?'selected':''}>None</option>
-          <option value="weekly" ${b.repeat==='weekly'?'selected':''}>Every Week</option>
-          <option value="monthly" ${b.repeat==='monthly'?'selected':''}>Every Month</option>
-        </select>
-      </td>
-      <td style="padding: 6px 4px;"><button type="button" class="del-btn b-del" data-idx="${idx}">✕</button></td>
-    </tr>
-  `).join("");
-}
+function getMonthExpenses() { return state.expenses.filter(x => x && monthOf(x.date) === state.month).sort((a,b)=> a.date > b.date ? 1 : -1); }
 
 // ---------- render ----------
 function render() {
@@ -345,29 +283,21 @@ function monthNavHTML() {
 }
 
 function renderDashboard() {
-  const monthAll = getMonthAllEntries();
-  const monthExpenses = monthAll.filter(x => !x.isIncome);
-  const monthIncomes = monthAll.filter(x => x.isIncome);
-
-  let totalPay = 0;
-  let totalTransport = 0;
+  const monthExpenses = getMonthExpenses();
   
+  // Calculate total pay dynamically based on each workplace's distinct pay cycle
+  let totalPay = 0;
   state.settings.workplaces.forEach(wp => {
     const { startD, endD } = getPeriodDates(state.month, wp.payCycle);
     const startStr = toISO(startD);
     const endStr = toISO(endD);
     
-    const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && !x.isDeleted && !x.isOff && x.date >= startStr && x.date <= endStr);
-    wpShifts.forEach(x => {
-      totalPay += computeEntry(x, wp.rate).pay;
-      totalTransport += (Number(wp.transportCost) || 0);
-    });
+    const wpShifts = state.workEntries.filter(x => x && x.placeId === wp.id && x.isCompleted && x.date >= startStr && x.date <= endStr);
+    totalPay += wpShifts.reduce((s,x) => s + (computeEntry(x, wp.rate).pay), 0);
   });
   
-  const otherIncomeTotal = monthIncomes.reduce((s,x)=>s+Number(x.amount),0);
-  const totalIncome = totalPay + totalTransport + otherIncomeTotal;
   const totalExpenses = monthExpenses.reduce((s,x)=>s+Number(x.amount),0);
-  const balance = totalIncome - totalExpenses;
+  const balance = totalPay - totalExpenses;
   const budgetTotal = Object.values(state.budgets).reduce((s,v)=>s+(Number(v)||0),0);
   const status = budgetTotal > 0 ? (totalExpenses > budgetTotal ? "over" : "good") : "neutral";
 
@@ -381,26 +311,20 @@ function renderDashboard() {
       </div>
     </div>` : "";
 
-  const rows = monthAll.length === 0
-    ? `<div class="empty-state">No entries logged this month yet.</div>`
-    : monthAll.slice(0,6).map(x => `
+  const rows = monthExpenses.length === 0
+    ? `<div class="empty-state">No expenses logged this month yet.</div>`
+    : monthExpenses.slice(0,6).map(x => `
       <div class="ledger-row">
         <span class="ledger-date num">${esc(x.date.slice(5))}</span>
         <div class="ledger-main"><span class="ledger-note">${esc(x.note || x.category)}</span><span class="ledger-cat">${esc(x.category)}</span></div>
-        <span class="ledger-amount num" style="color: ${x.isIncome ? 'var(--green)' : 'inherit'}">${x.isIncome ? '+' : ''}${yen(x.amount)}</span>
+        <span class="ledger-amount num">${yen(x.amount)}</span>
       </div>`).join("");
 
   return `
     ${monthNavHTML()}
     <div class="dash-header">
       <div class="stat-grid" style="flex:1">
-        <div class="stat-box">
-          <div class="label">Total Income</div>
-          <div class="value pos num" style="line-height:1.2;">
-            ${yen(totalIncome)}
-            <div style="font-size:11px; color:var(--ink-soft); font-weight:normal;">(バイト等 ${yen(totalPay + totalTransport)} / 他 ${yen(otherIncomeTotal)})</div>
-          </div>
-        </div>
+        <div class="stat-box"><div class="label">Income (All Workplaces)</div><div class="value pos num">${yen(totalPay)}</div></div>
         <div class="stat-box"><div class="label">Expenses</div><div class="value neg num">${yen(totalExpenses)}</div></div>
         <div class="stat-box"><div class="label">Balance</div><div class="value num ${balance>=0?'pos':'neg'}">${yen(balance)}</div></div>
       </div>
@@ -411,50 +335,21 @@ function renderDashboard() {
 }
 
 function renderExpenses() {
-  const monthAll = getMonthAllEntries();
-  const monthExpenses = monthAll.filter(x => !x.isIncome);
-  
-  const catOptions = state.settings.categories.map(c=>`<option value="${c}">${c}</option>`).join("");
-  const rows = monthAll.map(x => `
+  const monthExpenses = getMonthExpenses();
+  const catOptions = CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join("");
+  const rows = monthExpenses.map(x => `
     <div class="ledger-row">
       <span class="ledger-date num">${esc(x.date.slice(5))}</span>
       <div class="ledger-main"><span class="ledger-note">${esc(x.note || x.category)}</span><span class="ledger-cat">${esc(x.category)}</span></div>
-      <span class="ledger-amount num" style="color: ${x.isIncome ? 'var(--green)' : 'inherit'}">${x.isIncome ? '+' : ''}${yen(x.amount)}</span>
+      <span class="ledger-amount num">${yen(x.amount)}</span>
       <button type="button" class="del-btn" data-del-expense="${x.id}">✕</button>
     </div>`).join("");
-
-  const recButtons = (state.settings.recurring || [])
-    .filter(r => !monthExpenses.some(e => e.linkedRecId === r.id))
-    .map(r => `
-    <div style="display:flex; align-items:center; gap:4px; background:var(--paper-dark); padding:6px 10px; border:1px solid var(--rule); border-radius:4px;">
-      <button type="button" style="background:transparent; border:none; cursor:pointer; font-weight:bold; color:var(--ink); padding:0;" data-add-rec="${r.id}">
-        + ${esc(r.name)}
-      </button>
-      <input type="number" id="qa-amt-${r.id}" class="num" value="${r.amount}" style="width:70px; padding:4px; font-size:13px; border:1px solid var(--rule); border-radius:3px; margin-left:4px;">
-    </div>
-  `).join("");
-  
-  const quickAddHtml = (state.settings.recurring && state.settings.recurring.length > 0) ? `
-    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
-      ${recButtons || '<div style="font-size:11px; color:var(--ink-soft);">すべて追加済みです。</div>'}
-    </div>
-  ` : `<div style="font-size:11px; color:var(--ink-soft); margin-bottom:20px;">設定(Settings)タブから「毎月の固定費テンプレート」を追加できます。</div>`;
 
   return `
     ${monthNavHTML()}
     <div class="card ledger-panel">
-      <p class="card-title">Quick Add (固定費)</p>
-      ${quickAddHtml}
-
-      <p class="card-title">Add Entry (支出 / 収入)</p>
+      <p class="card-title">Add Expense</p>
       <form class="form-row" id="expForm" style="margin-bottom:20px">
-        <div class="field">
-          <label>Type</label>
-          <select id="expType" style="width: 80px;">
-            <option value="expense">支出 (-)</option>
-            <option value="income">収入 (+)</option>
-          </select>
-        </div>
         <div class="field"><label>Date</label><input type="date" id="expDate" value="${todayISO()}" required></div>
         <div class="field"><label>Category</label><select id="expCategory">${catOptions}</select></div>
         <div class="field"><label>Amount (¥)</label><input class="num" type="number" min="1" placeholder="0" id="expAmount" required></div>
@@ -467,11 +362,11 @@ function renderExpenses() {
 }
 
 function renderBudget() {
-  const monthExpenses = getMonthAllEntries().filter(x => !x.isIncome);
+  const monthExpenses = getMonthExpenses();
   const spentByCategory = {};
   monthExpenses.forEach(x => { spentByCategory[x.category] = (spentByCategory[x.category]||0) + Number(x.amount); });
 
-  const rows = state.settings.categories.map(cat => {
+  const rows = CATEGORIES.map(cat => {
     const b = Number(state.budgets[cat]) || 0;
     const spent = spentByCategory[cat] || 0;
     const remainText = b > 0 ? (b - spent >= 0 ? yen(b-spent)+" left" : yen(spent-b)+" over") : "no budget set";
@@ -503,13 +398,22 @@ function renderHours() {
     </div>`;
 
   const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-  const { startD, endD } = getPeriodDates(state.month, activeWp.payCycle);
   const todayStr = todayISO();
 
-  let displayShifts = [];
-  let totalPay = 0, totalHours = 0, totalNight = 0, totalTransport = 0;
+  // ★変更点：カレンダーの表示期間は常に「実際の月の1日〜月末」
+  const [y, m] = state.month.split("-").map(Number);
+  const calStartD = new Date(y, m - 1, 1);
+  const calEndD = new Date(y, m, 0);
 
-  for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+  // ★変更点：給与計算の期間（16日〜15日など）は独立して取得
+  const { startD: payStartD, endD: payEndD } = getPeriodDates(state.month, activeWp.payCycle);
+  const payStartStr = toISO(payStartD);
+  const payEndStr = toISO(payEndD);
+
+  let displayShifts = [];
+  
+  // 1. 実際の月の1日〜月末までのカレンダーを生成
+  for (let d = new Date(calStartD); d <= calEndD; d.setDate(d.getDate() + 1)) {
     const dateStr = toISO(d);
     const dayOfWeek = d.getDay();
     
@@ -517,16 +421,7 @@ function renderHours() {
     
     if (savedShiftsForDay.length > 0) {
       savedShiftsForDay.forEach(shift => {
-        if (shift.isDeleted) return; // 完全に消したシフトは無視
-
-        const calc = shift.isOff ? { totalHours: 0, nightHours: 0, pay: 0 } : computeEntry(shift, activeWp.rate);
-        
-        if (shift.isCompleted && !shift.isOff) {
-          totalPay += calc.pay; 
-          totalHours += calc.totalHours; 
-          totalNight += calc.nightHours;
-          totalTransport += Number(activeWp.transportCost) || 0;
-        }
+        const calc = computeEntry(shift, activeWp.rate);
         displayShifts.push({ ...shift, calc, dayName: DAYS[dayOfWeek] });
       });
     } else {
@@ -542,11 +437,22 @@ function renderHours() {
     }
   }
 
+  // 2. 合計計算（表示されている月ではなく、シフトのサイクル期間で計算）
+  let totalPay = 0, totalHours = 0, totalNight = 0;
+  const wpShifts = state.workEntries.filter(x => x && x.placeId === activeWp.id && x.isCompleted && x.date >= payStartStr && x.date <= payEndStr);
+  wpShifts.forEach(shift => {
+    const calc = computeEntry(shift, activeWp.rate);
+    totalPay += calc.pay;
+    totalHours += calc.totalHours;
+    totalNight += calc.nightHours;
+  });
+
+  // 過去のシフトを隠す処理
   let visibleShifts = [];
   let hiddenCount = 0;
 
   displayShifts.forEach(x => {
-    if (x.isCompleted && x.date < todayStr && !x.isOff) {
+    if (x.isCompleted && x.date < todayStr) {
       if (state.showHiddenShifts) {
         visibleShifts.push(x);
       } else {
@@ -568,23 +474,6 @@ function renderHours() {
   const ledgerRows = visibleShifts.length === 0
     ? `<div class="empty-state">No scheduled shifts to display.</div>`
     : visibleShifts.map(x => {
-        if (x.isOff) {
-          return `
-          <div class="ledger-row shift-row shift-virtual" style="border: 1px dashed var(--red); background: #fdf5f4;">
-            <div style="display:flex; align-items:center; gap:8px; width: 100%;">
-              <div style="width:20px;"></div>
-              <div style="display:flex; flex-direction:column; align-items:center; width:44px; flex-shrink:0;">
-                <span class="num" style="font-size:14px; font-weight:bold; color:var(--red);">${x.date.slice(8,10)}</span>
-                <span style="font-size:10px; color:var(--red-soft);">${x.dayName}</span>
-              </div>
-              <div style="display:flex; gap:4px; flex:1; align-items:center; color: var(--red); font-weight: bold; letter-spacing: 0.1em; padding-left: 4px;">
-                休み
-              </div>
-              <button type="button" class="del-btn" data-del-work="${x.id}" data-virtual="${x.isVirtual}" data-adhoc="${x.isAdhoc}" data-date="${x.date}">✕</button>
-            </div>
-          </div>`;
-        }
-
         let rowClass = "shift-virtual";
         if (x.isCompleted && !x.isAdhoc) rowClass = "shift-completed";
         if (x.isAdhoc) rowClass = "shift-adhoc";
@@ -604,7 +493,7 @@ function renderHours() {
               <input type="number" class="num edit-brk" data-id="${x.id}" data-virtual="${x.isVirtual}" data-date="${x.date}" value="${x.breakMin || 0}" step="1" style="width:50px; padding:4px;" title="Break(min)">
             </div>
             <span class="ledger-amount num" style="opacity: ${x.isCompleted ? '1' : '0.4'}">${yen(x.calc.pay)}</span>
-            <button type="button" class="del-btn" data-del-work="${x.id}" data-virtual="${x.isVirtual}" data-adhoc="${x.isAdhoc}" data-date="${x.date}">✕</button>
+            ${!x.isVirtual ? `<button type="button" class="del-btn" data-del-work="${x.id}">✕</button>` : `<div style="width:28px;"></div>`}
           </div>
           <div style="width:100%; text-align:right; font-size:11px; color:var(--ink-soft); margin-top:4px;">
              ${x.isAdhoc ? '<strong style="color:var(--ink);">Extra Shift</strong> | ' : ''}${x.calc.totalHours.toFixed(1)}h @ ¥${activeWp.rate}/hr${x.calc.nightHours>0?` (${x.calc.nightHours.toFixed(1)}h late)`:""}
@@ -617,7 +506,7 @@ function renderHours() {
     ${subTabsHtml}
 
     <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
-      * Displaying shifts from ${startD.getMonth()+1}/${startD.getDate()} to ${endD.getMonth()+1}/${endD.getDate()}
+      * Displaying calendar for ${calStartD.getMonth()+1}/${calStartD.getDate()} to ${calEndD.getMonth()+1}/${calEndD.getDate()}
     </div>
 
     <div style="padding: 12px 0;">
@@ -626,55 +515,35 @@ function renderHours() {
       ${ledgerRows}
     </div>
 
-    <!-- NEW MULTI-DATE SHIFT GENERATOR UI -->
     <div class="card shift-adhoc" style="margin-top: 16px;">
-      <p class="card-title" style="color: var(--ink);">+ Add Shifts (複数日・繰り返し追加)</p>
-      <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px;">カレンダーの日付をタップしてシフトを追加します。デフォルト時間が自動入力されます。</div>
-
-      <div style="display:flex; gap:16px; flex-wrap:wrap; justify-content:center;">
-        <!-- Left: Mini Calendar -->
-        <div style="width: 240px; flex-shrink: 0; background:var(--paper); padding:10px; border-radius:6px; border:1px solid var(--rule);">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-            <button type="button" class="icon-btn" id="miniPrev" style="padding:2px 8px;">‹</button>
-            <span style="font-weight:bold; font-size:13px;">${formatMonth(state.miniCalMonth)}</span>
-            <button type="button" class="icon-btn" id="miniNext" style="padding:2px 8px;">›</button>
-          </div>
-          ${renderMiniCalendar(state.miniCalMonth)}
-        </div>
-
-        <!-- Right: Table -->
-        <div style="flex: 1; min-width: 300px; background:var(--paper); padding:10px; border-radius:6px; border:1px solid var(--rule);">
-          <table style="width:100%; border-collapse: collapse; margin-bottom:8px;">
-            <thead>
-              <tr style="border-bottom:1px solid var(--rule); text-align:left; font-size:11px; color:var(--ink-soft);">
-                <th style="padding-bottom:4px;">Date</th><th style="padding-bottom:4px;">In</th><th style="padding-bottom:4px;">Out</th><th style="padding-bottom:4px;">Break</th><th style="padding-bottom:4px;">Repeat</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${renderBatchDatesRows()}
-            </tbody>
-          </table>
-          <div style="text-align:right;">
-            <button type="button" class="add-btn" id="saveBatchDatesBtn" style="background:var(--ink);">+ Save Shifts</button>
-          </div>
-        </div>
-      </div>
+      <p class="card-title" style="color: var(--ink);">+ Add Single Shift (指定日に追加)</p>
+      <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px;">Use this to add a shift on a specific day one by one.</div>
+      <form class="form-row" id="addAdhocForm">
+        <div class="field"><label>Date</label><input type="date" id="adDate" value="${todayISO()}" required></div>
+        <div class="field"><label>In</label><input type="time" id="adIn" value="10:00" step="60" required></div>
+        <div class="field"><label>Out</label><input type="time" id="adOut" value="15:00" step="60" required></div>
+        <div class="field"><label>Break</label><input type="number" min="0" id="adBreak" value="0" step="1" class="num" style="width:60px"></div>
+        <button type="submit" class="add-btn" style="background:var(--ink);">+ Add</button>
+      </form>
     </div>
 
     <div class="stat-grid">
-      <div class="stat-box"><div class="label">Total hours</div><div class="value num">${totalHours.toFixed(1)}h</div></div>
-      <div class="stat-box"><div class="label">LATE NIGHT</div><div class="value num" style="color:var(--amber)">${totalNight.toFixed(1)}h</div></div>
       <div class="stat-box">
-        <div class="label">Total pay</div>
-        <div class="value pos num" style="line-height:1.2;">
-          ${yen(totalPay + totalTransport)}
-          <div style="font-size:11px; color:var(--ink-soft); font-weight:normal;">(+ ${yen(totalTransport)} 交通費)</div>
-        </div>
+        <div class="label">Total hours<br><span style="font-size:9px; text-transform:none;">(${payStartD.getMonth()+1}/${payStartD.getDate()} - ${payEndD.getMonth()+1}/${payEndD.getDate()})</span></div>
+        <div class="value num">${totalHours.toFixed(1)}h</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">LATE NIGHT<br><span style="font-size:9px; text-transform:none;">(${payStartD.getMonth()+1}/${payStartD.getDate()} - ${payEndD.getMonth()+1}/${payEndD.getDate()})</span></div>
+        <div class="value num" style="color:var(--amber)">${totalNight.toFixed(1)}h</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">Total pay<br><span style="font-size:9px; text-transform:none;">(${payStartD.getMonth()+1}/${payStartD.getDate()} - ${payEndD.getMonth()+1}/${payEndD.getDate()})</span></div>
+        <div class="value pos num">${yen(totalPay)}</div>
       </div>
     </div>
     
     <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px; text-align:right;">
-      * Only shifts marked with a ✅ are included in the totals. Paid end of cycle.
+      * Only shifts marked with a ✅ inside the above cycle are included in totals.
     </div>`;
 }
 
@@ -692,7 +561,7 @@ function renderSettings() {
           <div class="field"><label>Default BREAK(m)</label><input type="number" class="wp-brk num" value="${w.defaultBreak}" step="1" style="width:80px"></div>
         </div>
         <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
-          <div class="field" style="width: 100%; max-width: 250px;">
+          <div class="field" style="width: 100%;">
             <label>PAY CYCLE (給与サイクル)</label>
             <select class="wp-cycle">
               <option value="1" ${w.payCycle === "1" ? 'selected' : ''}>1st - End of Month (1日〜月末)</option>
@@ -700,18 +569,13 @@ function renderSettings() {
               <option value="16" ${w.payCycle === "16" ? 'selected' : ''}>16th - 15th (15日締め/16日開始)</option>
             </select>
           </div>
-          <div class="field" style="width: 100%; max-width: 150px;">
-            <label>TRANSPORT (¥ / 交通費)</label>
-            <input type="number" class="wp-trans num" value="${w.transportCost || 0}" placeholder="0">
-          </div>
         </div>
         <div style="border-top: 1px dashed var(--rule); margin: 12px 0;"></div>
         <label style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); font-weight: bold; display:block; margin-bottom:8px;">REPEAT (EVERY WEEK)</label>
         <div style="display:flex; justify-content:space-between; max-width:320px;">
           ${DAYS.map((dayName, dIdx) => `
             <label class="day-chk">
-              <input type="checkbox" class="wp-day" value="${dIdx}" ${w.activeDays.includes(dIdx) ? 'checked' : ''}>
-              ${dayName}
+              <input type="checkbox" class="wp-day" value="${dIdx}" ${w.activeDays.includes(dIdx) ? 'checked' : ''}>${dayName}
             </label>
           `).join("")}
         </div>
@@ -721,72 +585,22 @@ function renderSettings() {
       </div>`;
   }).join("");
 
-  const recRows = state.settings.recurring.map((r, idx) => `
-    <div class="rec-row" data-id="${r.id}" style="display:flex; gap:10px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
-      <input type="text" class="rec-name" value="${esc(r.name)}" placeholder="Gym, Phone..." style="flex:1; min-width:100px;">
-      <select class="rec-cat">${state.settings.categories.map(c=>`<option value="${c}" ${c===r.category?'selected':''}>${c}</option>`).join('')}</select>
-      <input type="number" class="rec-amount num" value="${r.amount}" placeholder="¥" style="width:100px;">
-      <button type="button" class="del-btn del-rec-btn" data-id="${r.id}">✕</button>
-    </div>
-  `).join("");
-
-  const subTabsHtml = `
-    <div style="display:flex; gap:2px; margin-bottom:16px; border-bottom: 2px solid var(--ink);">
-      <button type="button" class="tab-btn ${state.activeSettingTab === 'shift' ? 'active' : ''}" data-settab="shift" style="flex:1; font-size:12px; padding:10px;">
-        シフト設定 (Shift)
-      </button>
-      <button type="button" class="tab-btn ${state.activeSettingTab === 'expense' ? 'active' : ''}" data-settab="expense" style="flex:1; font-size:12px; padding:10px;">
-        支出・固定費 (Expense)
-      </button>
-    </div>`;
-
   return `
-    ${subTabsHtml}
-    
-    <form id="settingsForm">
-      
-      <!-- SHIFT SETTINGS TAB -->
-      <div style="display: ${state.activeSettingTab === 'shift' ? 'block' : 'none'};">
-        <div class="card">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <p class="card-title" style="margin:0;">SHIFT SETTINGS (シフト設定)</p>
-            <button type="button" class="add-btn" id="addWpBtn" style="font-size:11px; padding:4px 8px; height:auto;">+ New Workplace</button>
-          </div>
-          <div style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">
-            Define your basic shift pattern here. The Working Hours tab will automatically generate calendar entries for these days.
-          </div>
-          ${wpRows || '<div class="empty-state">No workplaces. Add one above.</div>'}
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <p class="card-title" style="margin:0;">SHIFT SETTINGS</p>
+        <button class="add-btn" id="addWpBtn" style="font-size:11px; padding:4px 8px; height:auto;">+ New Workplace</button>
+      </div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:16px;">
+        Define your basic shift pattern here. The Working Hours tab will automatically generate calendar entries for these days.
+      </div>
+      <form id="wpSettingsForm">
+        ${wpRows || '<div class="empty-state">No workplaces. Add one above.</div>'}
+        <div style="display:flex; justify-content:flex-end;">
+          <button type="submit" class="add-btn" style="background:var(--green); border:1px solid #2e4029;">Save Settings</button>
         </div>
-      </div>
-
-      <!-- EXPENSE SETTINGS TAB -->
-      <div style="display: ${state.activeSettingTab === 'expense' ? 'block' : 'none'};">
-        <div class="card">
-          <p class="card-title" style="margin-bottom:16px;">EXPENSE SETTINGS (支出設定)</p>
-          
-          <div class="field" style="margin-bottom:20px;">
-            <label>CATEGORIES (カテゴリを自由に編集)</label>
-            <input type="text" class="setting-cats" value="${state.settings.categories.join(", ")}">
-            <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">カンマ( , )区切りで入力。変更すると予算(Budget)タブにも反映されます。</div>
-          </div>
-          
-          <div style="border-top: 1px dashed var(--rule); margin: 20px 0;"></div>
-          
-          <label style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); font-weight: bold; display:block; margin-bottom:8px;">MONTHLY TEMPLATES (毎月の固定費)</label>
-          <div style="font-size:11px; color:var(--ink-soft); margin-bottom:12px;">登録しておくと、Expensesタブにワンタップで追加できる専用ボタンが表示されます。</div>
-          
-          <div id="rec-list">
-            ${recRows}
-          </div>
-          <button type="button" class="add-btn" id="addRecBtn" style="font-size:11px; background:transparent; color:var(--ink); border:1px dashed var(--ink-soft); margin-top:8px;">+ Add Template</button>
-        </div>
-      </div>
-
-      <div style="display:flex; justify-content:flex-end; margin-bottom:18px;">
-        <button type="submit" class="add-btn" style="background:var(--green); border:1px solid #2e4029; font-size:14px; padding:10px 20px;">Save Settings</button>
-      </div>
-    </form>
-
+      </form>
+    </div>
     <div class="card">
       <p class="card-title">Backup &amp; Restore</p>
       <div class="backup-row">
@@ -813,13 +627,11 @@ function attachHandlers() {
   const next = document.getElementById("nextMonth");
   if (prev) prev.onclick = () => { 
     state.month = shiftMonth(state.month, -1); 
-    state.miniCalMonth = state.month; 
     localStorage.setItem("kakeibo_month", state.month);
     render(); 
   };
   if (next) next.onclick = () => { 
     state.month = shiftMonth(state.month, 1); 
-    state.miniCalMonth = state.month; 
     localStorage.setItem("kakeibo_month", state.month);
     render(); 
   };
@@ -827,46 +639,12 @@ function attachHandlers() {
   const expForm = document.getElementById("expForm");
   if (expForm) expForm.onsubmit = (e) => {
     e.preventDefault();
-    const typeVal = document.getElementById("expType").value;
-    state.expenses.push({ 
-      id: uid(), 
-      date: document.getElementById("expDate").value, 
-      category: document.getElementById("expCategory").value, 
-      amount: Number(document.getElementById("expAmount").value), 
-      note: document.getElementById("expNote").value.trim(),
-      createdAt: Date.now(),
-      isIncome: typeVal === "income" 
-    });
+    state.expenses.push({ id: uid(), date: document.getElementById("expDate").value, category: document.getElementById("expCategory").value, amount: Number(document.getElementById("expAmount").value), note: document.getElementById("expNote").value.trim() });
     save("kakeibo_expenses", state.expenses); render();
   };
-
-  document.querySelectorAll("[data-add-rec]").forEach(btn => {
-    btn.onclick = () => {
-      const recId = btn.dataset.addRec;
-      const template = state.settings.recurring.find(r => r.id === recId);
-      const amtInput = document.getElementById(`qa-amt-${recId}`); 
-      
-      if(template) {
-        const finalAmount = amtInput ? Number(amtInput.value) : template.amount;
-        const tarfetDate  = (todayISO().slice(0,7) === state.month) ? todayISO() : state.month + "-01"; 
-        state.expenses.push({ 
-          id: uid(), 
-          date: tarfetDate, 
-          category: template.category, 
-          amount: finalAmount, 
-          note: template.name,
-          createdAt: Date.now(), 
-          linkedRecId: recId,
-          isIncome: false 
-        });
-        save("kakeibo_expenses", state.expenses);
-        render();
-      }
-    };
-  });
   
   document.querySelectorAll("[data-del-expense]").forEach(btn => btn.onclick = () => {
-      if(confirm("Delete this entry?")) { state.expenses = state.expenses.filter(x => x.id !== btn.dataset.delExpense); save("kakeibo_expenses", state.expenses); render(); }
+      if(confirm("Delete this expense?")) { state.expenses = state.expenses.filter(x => x.id !== btn.dataset.delExpense); save("kakeibo_expenses", state.expenses); render(); }
   });
   
   document.querySelectorAll("[data-budget-cat]").forEach(inp => inp.onblur = () => {
@@ -882,15 +660,18 @@ function attachHandlers() {
   });
 
   const toggleHiddenBtn = document.getElementById("toggleHiddenBtn");
-  if (toggleHiddenBtn) toggleHiddenBtn.onclick = () => { state.showHiddenShifts = !state.showHiddenShifts; render(); };
+  if (toggleHiddenBtn) {
+    toggleHiddenBtn.onclick = () => {
+      state.showHiddenShifts = !state.showHiddenShifts;
+      render();
+    };
+  }
 
   const handleShiftInteraction = (target, field, isCheckbox) => {
     const isVirtual = target.dataset.virtual === "true";
     const date = target.dataset.date;
     const val = isCheckbox ? target.checked : target.value;
     const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-
-    let targetShiftId;
 
     if (isVirtual) {
       const row = target.closest('.shift-row');
@@ -910,42 +691,17 @@ function attachHandlers() {
       if(field === 'clockOut') newShift.clockOut = val;
       if(field === 'breakMin') newShift.breakMin = Number(val);
 
-      targetShiftId = newShift.id;
       state.workEntries.push(newShift);
+      save("kakeibo_workEntries", state.workEntries);
+      render();
     } else {
       const shift = state.workEntries.find(x => x.id === target.dataset.id);
       if (shift) {
         shift[field] = field === 'breakMin' ? Number(val) : val;
-        targetShiftId = shift.id;
+        save("kakeibo_workEntries", state.workEntries);
+        render();
       }
     }
-
-    if (targetShiftId && field === 'isCompleted') {
-      const transportCost = Number(activeWp.transportCost) || 0;
-      if (transportCost > 0) {
-        if (val === true) {
-          const existing = state.expenses.find(e => e.linkedShiftId === targetShiftId);
-          if (!existing) {
-            state.expenses.push({ 
-              id: uid(), 
-              date: date, 
-              category: "Transport", 
-              amount: transportCost, 
-              note: `${activeWp.name} 交通費`, 
-              linkedShiftId: targetShiftId,
-              createdAt: Date.now(),
-              isIncome: false 
-            });
-          }
-        } else {
-          state.expenses = state.expenses.filter(e => e.linkedShiftId !== targetShiftId);
-        }
-        save("kakeibo_expenses", state.expenses);
-      }
-    }
-
-    save("kakeibo_workEntries", state.workEntries);
-    render();
   };
 
   document.querySelectorAll(".shift-done").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'isCompleted', true));
@@ -953,186 +709,47 @@ function attachHandlers() {
   document.querySelectorAll(".edit-out").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'clockOut', false));
   document.querySelectorAll(".edit-brk").forEach(el => el.onchange = (e) => handleShiftInteraction(e.target, 'breakMin', false));
 
-  const miniPrev = document.getElementById("miniPrev");
-  if(miniPrev) miniPrev.onclick = () => { state.miniCalMonth = shiftMonth(state.miniCalMonth, -1); render(); };
-  const miniNext = document.getElementById("miniNext");
-  if(miniNext) miniNext.onclick = () => { state.miniCalMonth = shiftMonth(state.miniCalMonth, 1); render(); };
-
-  document.querySelectorAll(".mini-cal-day").forEach(day => {
-    day.onclick = (e) => {
-      const d = e.target.dataset.date;
-      const existsIdx = state.batchDates.findIndex(b => b.date === d);
-      if (existsIdx >= 0) {
-        state.batchDates.splice(existsIdx, 1); 
-      } else {
-        const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-        state.batchDates.push({
-          date: d,
-          in: activeWp.defaultIn || "09:00",
-          out: activeWp.defaultOut || "17:00",
-          brk: activeWp.defaultBreak || 0,
-          repeat: "none"
-        });
-        state.batchDates.sort((a,b) => a.date > b.date ? 1 : -1);
-      }
-      render(); 
-    };
-  });
-
-  document.querySelectorAll(".b-in").forEach(el => el.onchange = e => state.batchDates[e.target.closest("tr").dataset.idx].in = e.target.value);
-  document.querySelectorAll(".b-out").forEach(el => el.onchange = e => state.batchDates[e.target.closest("tr").dataset.idx].out = e.target.value);
-  document.querySelectorAll(".b-brk").forEach(el => el.onchange = e => state.batchDates[e.target.closest("tr").dataset.idx].brk = e.target.value);
-  document.querySelectorAll(".b-rep").forEach(el => el.onchange = e => state.batchDates[e.target.closest("tr").dataset.idx].repeat = e.target.value);
-  document.querySelectorAll(".b-del").forEach(el => el.onclick = e => {
-    state.batchDates.splice(e.target.dataset.idx, 1);
-    render();
-  });
-
-  const saveBatchDatesBtn = document.getElementById("saveBatchDatesBtn");
-  if(saveBatchDatesBtn) saveBatchDatesBtn.onclick = () => {
-    if (state.batchDates.length === 0) return alert("カレンダーから追加したい日付を選んでください。");
-    const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-    let added = 0;
-
-    state.batchDates.forEach(b => {
-      let datesToAdd = [b.date];
+  // 1日ずつ追加するフォーム
+  const adForm = document.getElementById("addAdhocForm");
+  if (adForm) {
+    adForm.onsubmit = (e) => {
+      e.preventDefault();
+      const adDate = document.getElementById("adDate").value;
       
-      if (b.repeat === 'weekly') {
-        for(let i=1; i<12; i++) { 
-          let d = new Date(b.date); d.setDate(d.getDate() + i*7);
-          datesToAdd.push(toISO(d));
-        }
-      } else if (b.repeat === 'monthly') {
-        for(let i=1; i<6; i++) {
-          let d = new Date(b.date); d.setMonth(d.getMonth() + i);
-          datesToAdd.push(toISO(d));
-        }
+      state.workEntries.push({
+        id: uid(), placeId: state.activePlaceId,
+        date: adDate,
+        clockIn: document.getElementById("adIn").value,
+        clockOut: document.getElementById("adOut").value,
+        breakMin: Number(document.getElementById("adBreak").value) || 0,
+        isCompleted: false,
+        isAdhoc: true
+      });
+      save("kakeibo_workEntries", state.workEntries);
+
+      // ★変更点：カレンダーが「月ごと」の表示になったため、追加した日付の実際の月へ素直に遷移させる
+      const [y, m, d] = adDate.split("-").map(Number);
+      const targetMonthStr = `${y}-${String(m).padStart(2, '0')}`;
+
+      if (state.month !== targetMonthStr) {
+        state.month = targetMonthStr;
+        localStorage.setItem('kakeibo_month', state.month);
       }
 
-      datesToAdd.forEach(dStr => {
-        const exists = state.workEntries.find(x => x.date === dStr && x.placeId === activeWp.id && x.clockIn === b.in && x.clockOut === b.out);
-        if(!exists) {
-          state.workEntries.push({
-            id: uid(), placeId: activeWp.id, date: dStr,
-            clockIn: b.in, clockOut: b.out, breakMin: Number(b.brk),
-            isCompleted: false, isAdhoc: true 
-          });
-          added++;
-        }
-      });
-    });
+      if (adDate < todayISO()) {
+        state.showHiddenShifts = true;
+      }
 
-    save("kakeibo_workEntries", state.workEntries);
-    state.batchDates = []; 
-    alert(`${added}件のシフトを追加しました！ ✅`);
-    render(); 
-  };
+      alert("単発シフトを追加しました！ ✅");
+      render();
+    };
+  }
 
   document.querySelectorAll("[data-del-work]").forEach(btn => {
     btn.onclick = () => {
-      const targetId = btn.dataset.delWork;
-      const isVirtual = btn.dataset.virtual === "true";
-      const isAdhoc = btn.dataset.adhoc === "true";
-      const date = btn.dataset.date;
-
-      const wantDelete = confirm("このシフトを完全に消去しますか？\n(「キャンセル」を押すと休みにするか選べます)");
-      
-      let action = null;
-      if (wantDelete) {
-        action = "1";
-      } else {
-        const wantOff = confirm("この日を「休み」として赤字で残しますか？");
-        if (wantOff) action = "2";
-      }
-
-      if (!action) return;
-
-      if (action === "1") {
-        if (isVirtual) {
-          state.workEntries.push({
-            id: uid(), placeId: state.activePlaceId, date: date,
-            clockIn: "00:00", clockOut: "00:00", breakMin: 0,
-            isCompleted: false, isAdhoc: false, isDeleted: true
-          });
-        } else {
-          const activeWp = state.settings.workplaces.find(w => w.id === state.activePlaceId);
-          const dayOfWeek = new Date(date).getDay();
-          
-          if (!isAdhoc && activeWp.activeDays.includes(dayOfWeek)) {
-            const shift = state.workEntries.find(x => x.id === targetId);
-            if (shift) {
-              shift.isDeleted = true;
-              shift.isOff = false;
-              shift.isCompleted = false;
-            }
-          } else {
-            state.workEntries = state.workEntries.filter(x => x.id !== targetId);
-          }
-          state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId);
-        }
-      } else if (action === "2") {
-        if (isVirtual) {
-          state.workEntries.push({
-            id: uid(), placeId: state.activePlaceId, date: date,
-            clockIn: "00:00", clockOut: "00:00", breakMin: 0,
-            isCompleted: false, isAdhoc: false, isOff: true
-          });
-        } else {
-          const shift = state.workEntries.find(x => x.id === targetId);
-          if (shift) {
-            shift.isOff = true;
-            shift.isDeleted = false;
-            shift.isCompleted = false;
-          }
-          state.expenses = state.expenses.filter(x => x.linkedShiftId !== targetId);
-        }
-      }
-      
+      if (!confirm("Delete this saved shift?")) return;
+      state.workEntries = state.workEntries.filter(x => x.id !== btn.dataset.delWork);
       save("kakeibo_workEntries", state.workEntries);
-      save("kakeibo_expenses", state.expenses);
-      render();
-    };
-  });
-
-  const syncSettingsForm = () => {
-    document.querySelectorAll(".shift-card").forEach((card, idx) => {
-      const wp = state.settings.workplaces[idx];
-      if(!wp) return;
-      wp.name = card.querySelector(".wp-name").value || "Unnamed";
-      wp.rate = Number(card.querySelector(".wp-rate").value) || 0;
-      wp.defaultIn = card.querySelector(".wp-in").value;
-      wp.defaultOut = card.querySelector(".wp-out").value;
-      wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
-      wp.payCycle = card.querySelector(".wp-cycle").value || "16"; 
-      wp.transportCost = Number(card.querySelector(".wp-trans").value) || 0;
-      wp.activeDays = [];
-      card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
-    });
-
-    const catInput = document.querySelector(".setting-cats");
-    if (catInput) {
-      state.settings.categories = catInput.value.split(",").map(s=>s.trim()).filter(Boolean);
-    }
-    
-    const recRows = document.querySelectorAll(".rec-row");
-    if (recRows.length > 0 || catInput) {
-      state.settings.recurring = Array.from(recRows).map(row => ({
-         id: row.dataset.id,
-         name: row.querySelector(".rec-name").value,
-         category: row.querySelector(".rec-cat").value,
-         amount: Number(row.querySelector(".rec-amount").value) || 0
-      }));
-    }
-  };
-
-  document.querySelectorAll("[data-settab]").forEach(btn => {
-    btn.onclick = (e) => {
-      e.preventDefault();
-      if (document.getElementById("settingsForm")) {
-        syncSettingsForm();
-      }
-      state.activeSettingTab = btn.dataset.settab;
-      localStorage.setItem("kakeibo_setting_tab", state.activeSettingTab);
       render();
     };
   });
@@ -1140,18 +757,7 @@ function attachHandlers() {
   const addWpBtn = document.getElementById("addWpBtn");
   if (addWpBtn) {
     addWpBtn.onclick = () => {
-      syncSettingsForm();
-      state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [], payCycle: "16", transportCost: 0 });
-      render();
-    };
-  }
-
-  const addRecBtn = document.getElementById("addRecBtn");
-  if (addRecBtn) {
-    addRecBtn.onclick = () => {
-      syncSettingsForm();
-      const firstCat = state.settings.categories.length > 0 ? state.settings.categories[0] : "Other";
-      state.settings.recurring.push({ id: uid(), name: "", category: firstCat, amount: 0 });
+      state.settings.workplaces.push({ id: uid(), name: "New Workplace", rate: 1000, defaultIn: "09:00", defaultOut: "17:00", defaultBreak: 60, activeDays: [], payCycle: "16" });
       render();
     };
   }
@@ -1159,28 +765,30 @@ function attachHandlers() {
   document.querySelectorAll(".del-wp-btn").forEach(btn => {
     btn.onclick = () => {
       if(!confirm("Are you sure?")) return;
-      syncSettingsForm();
       state.settings.workplaces = state.settings.workplaces.filter(w => w.id !== btn.dataset.id);
+      save("kakeibo_settings", state.settings);
       render();
     };
   });
 
-  document.querySelectorAll(".del-rec-btn").forEach(btn => {
-    btn.onclick = () => {
-      syncSettingsForm();
-      state.settings.recurring = state.settings.recurring.filter(r => r.id !== btn.dataset.id);
-      render();
-    };
-  });
-
-  const settingsForm = document.getElementById("settingsForm");
-  if (settingsForm) {
-    settingsForm.onsubmit = (e) => {
+  const wpSettingsForm = document.getElementById("wpSettingsForm");
+  if (wpSettingsForm) {
+    wpSettingsForm.onsubmit = (e) => {
       e.preventDefault();
-      syncSettingsForm();
+      document.querySelectorAll(".shift-card").forEach((card, idx) => {
+        const wp = state.settings.workplaces[idx];
+        wp.name = card.querySelector(".wp-name").value || "Unnamed";
+        wp.rate = Number(card.querySelector(".wp-rate").value) || 0;
+        wp.defaultIn = card.querySelector(".wp-in").value;
+        wp.defaultOut = card.querySelector(".wp-out").value;
+        wp.defaultBreak = Number(card.querySelector(".wp-brk").value) || 0;
+        wp.payCycle = card.querySelector(".wp-cycle").value || "16";
+        
+        wp.activeDays = [];
+        card.querySelectorAll(".wp-day:checked").forEach(chk => wp.activeDays.push(Number(chk.value)));
+      });
       save("kakeibo_settings", state.settings);
       alert("Settings Saved!");
-      render();
     };
   }
 
